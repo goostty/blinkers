@@ -1,6 +1,7 @@
 import { getCurrentWindow, LogicalSize } from '@tauri-apps/api/window';
 import { invoke } from '@tauri-apps/api/core';
 
+
 interface BaseBlock {
   id: string;
   title: string;
@@ -39,6 +40,7 @@ const appWindow = getCurrentWindow();
 
 // 2. Fetch DOM Layout Elements
 const pauseBtn = document.getElementById('btn-pause');
+const anchorBtn = document.getElementById('create-anchor');
 const toggleDrawerBtn = document.getElementById('btn-toggle-drawer');
 const drawer = document.getElementById('creation-drawer');
 const drawerIcon = document.getElementById('icon-drawer');
@@ -62,7 +64,10 @@ type Block = DeepWorkBlock | RoutineBlock | ResetBlock | RechargeBlock;
 type BlockType = 'deep' | 'routine' | 'reset' | 'recharge';
 const blockOrder: BlockType[] = ['deep', 'routine', 'reset', 'recharge'];
 let currentBlockType: BlockType = 'deep';
-let dailyTimeline: Block[] = [];
+let dailyTimeLine: Block[] = [];
+
+let activeBlock = await invoke<DeepWorkBlock>("fetch_container");
+dailyTimeLine.push(activeBlock);
 
 
 // 3. Application State Flags
@@ -128,6 +133,8 @@ function handlePlaybackToggle() {
 			stateBadge.innerText = 'SETUP'; // Dynamic depending on the active container state
 			stateBadge.className = 'text-[9px] font-semibold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 px-1.5 py-0.5 rounded-full uppercase';
 		}
+
+		// Handle Action
 
 		console.log("IPC: Sending Resume Command down to Go Engine...");
 		// TODO: Connect Tauri IPC Bridge
@@ -215,6 +222,7 @@ function updateFormLayout(type: BlockType) {
 }
 
 function initBlockSelector() {
+	console.log("initBlockSelector function fired!");
   const overlay = document.getElementById('tab-overlay');
 
 	const buttons = [deepWorkBlock, routineBlock, resetBlock, rechargeBlock];
@@ -299,12 +307,17 @@ function addBreak() {
 	if (breakList) breakList.appendChild(newInput);
 }
 
+function addAnchor() {
+	return;	
+}
+
 // Attach Event Listeners to Buttons
 if (pauseBtn) pauseBtn.addEventListener('click', handlePlaybackToggle);
 if (toggleDrawerBtn) toggleDrawerBtn.addEventListener('click', toggleDrawer);
 if (addTaskButton) addTaskButton.addEventListener('click', addTask);
 if (addSetupButton) addSetupButton.addEventListener('click', addSetup);
 if (addBreakButton) addBreakButton.addEventListener('click', addBreak);
+if (anchorBtn) anchorBtn.addEventListener('click', addAnchor);
 
 
 // Intercept form submissions to extract data structures and deploy them to Go
@@ -350,6 +363,4 @@ if (createForm) {
 }
 
 // At the very bottom of your script file:
-document.addEventListener('DOMContentLoaded', () => {
-  initBlockSelector();
-});
+initBlockSelector();

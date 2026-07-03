@@ -88,7 +88,7 @@ pub async fn insert_container(
 }
 
 #[tauri::command]
-async fn get_next_order_index(pool: tauri::State<'_, sqlx::SqlitePool>) -> Result<i32, String> {
+pub async fn get_next_order_index(pool: tauri::State<'_, sqlx::SqlitePool>) -> Result<i32, String> {
     // 1. Execute query and store the raw result in a variable
     let max_index: i32 = sqlx::query_scalar::<_, i32>("SELECT COALESCE(MAX(order_index), -1) as \"order_index: i32\" FROM containers")
         .fetch_one(&*pool)

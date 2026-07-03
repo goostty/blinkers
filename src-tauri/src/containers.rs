@@ -5,6 +5,14 @@ use std::collections::VecDeque;
 use tauri::State;
 use uuid::Uuid;
 
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LifeAnchor {
+    pub anchor_id: i32,
+    pub anchor_name: String,
+    pub time_window: String
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum ContainerType {
@@ -20,7 +28,8 @@ pub enum ContainerType {
     },
 }
 
-#[derive(Clone, Serialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Container {
     pub id: String,
     pub focus_block_id: String,
@@ -29,7 +38,8 @@ pub struct Container {
     pub notes: Option<String>
 }
 
-#[derive(Serialize, Clone)]
+#[derive(Serialize, Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct FocusBlock {
     pub id : String,
     pub setup_container : Container,
@@ -38,7 +48,7 @@ pub struct FocusBlock {
     pub is_completed : bool
 }
 
-#[derive(sqlx::FromRow)] // Allows SQLx to automatically map columns to this struct
+#[derive(Debug, sqlx::FromRow)] // Allows SQLx to automatically map columns to this struct
 struct RawContainerRow {
     id: String,
     focus_block_id: String,

@@ -10,7 +10,7 @@
 	<style>
 		/* Crucial window resets for a seamless desktop widget */
 		html,
-		body {	
+		body {
 			overflow: hidden;
 			background-color: transparent;
 			/* Allows desktop wallpaper to show through */
@@ -50,18 +50,17 @@
 					</svg>
 				</button>
 
-				<button id="btn-skip"
-					class="cursor-pointer p-1 hover:bg-slate-800 rounded text-slate-400 hover:text-slate-100 transition-colors"
-					title="Skip">
-					<svg class="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 24 24">
-						<path d="M6 18l8.5-6L6 6v12zM16 6v12h2V6h-2z" />
+				<button id="drop-btn" 
+					class="cursor-pointer p-1 hover:bg-red-600 rounded text-slate-400 hover:text-slate-100 transition-colors"
+					title="Drop from queue">
+					<svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none"
+						stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+						<path d="M3 6h18" />
+						<path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6" />
+						<path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2" />
+						<line x1="10" y1="11" x2="14" y2="15" />
+						<line x1="14" y1="11" x2="10" y2="15" />
 					</svg>
-				</button>
-
-				<button id="order-containers" 
-					class="cursor-pointer p-1 hover:bg-slate-800 rounded text-slate-400 hover:text-slate-100 transition-colors"
-					title="Containers">
-
 				</button>
 
 				<button id="btn-toggle-drawer"
@@ -72,6 +71,32 @@
 						<path stroke-linecap="round" stroke-linejoin="round" d="M12 4.5v15m7.5-7.5h-15" />
 					</svg>
 				</button>
+
+				<button id="create-anchor"
+					class="cursor-pointer p-1 hover:bg-slate-800 rounded text-slate-400 hover:text-slate-100 transition-colors"
+					title="Anchor">
+					<svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+						stroke-linecap="round" stroke-linejoin="round">
+						<circle cx="12" cy="10" r="3" />
+						<path d="M12 13v8" />
+						<path d="M5 12A7 7 0 0 0 19 12" />
+						<path d="M5 12H3" />
+						<path d="M21 12H19" />
+					</svg>
+				</button>
+
+				<button id="settings"
+					class="cursor-pointer p-1 hover:bg-slate-800 rounded text-slate-400 hover:text-slate-100 transition-colors"
+					title="Settings">
+					<svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+						stroke-linecap="round" stroke-linejoin="round" class="gear-icon">
+						<path
+							d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.1a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z" />
+						<circle cx="12" cy="12" r="3" />
+					</svg>
+
+				</button>
+
 			</div>
 		</div>
 
@@ -175,4 +200,5 @@
 		</div>
 	</div>
 </body>
+
 </html>
