@@ -13,9 +13,7 @@
 		body {
 			overflow: hidden;
 			background-color: transparent;
-			/* Allows desktop wallpaper to show through */
 			user-select: none;
-			/* Prevents text highlighting while dragging or coding */
 		}
 	</style>
 </head>
@@ -66,7 +64,7 @@
 				<button id="btn-toggle-drawer"
 					class="cursor-pointer p-1 hover:bg-slate-800 rounded text-indigo-400 hover:text-indigo-300 transition-colors select-none"
 					title="Create Container">
-					<svg id="icon-drawer" class="w-3.5 h-3.5 transition-transform duration-300 pointer-events-none" fill="none"
+					<svg id="add-task-icon" class="drawer-toggle-icon w-3.5 h-3.5 transition-transform duration-300 pointer-events-none" fill="none"
 						stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24">
 						<path stroke-linecap="round" stroke-linejoin="round" d="M12 4.5v15m7.5-7.5h-15" />
 					</svg>
@@ -74,8 +72,8 @@
 
 				<button id="create-anchor"
 					class="cursor-pointer p-1 hover:bg-slate-800 rounded text-slate-400 hover:text-slate-100 transition-colors"
-					title="Anchor">
-					<svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+					title="Anchor / Cue">
+					<svg id="add-cue-icon" class="drawer-toggle-icon w-3.5 h-3.5 transition-transform duration-300 pointer-events-none" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
 						stroke-linecap="round" stroke-linejoin="round">
 						<circle cx="12" cy="10" r="3" />
 						<path d="M12 13v8" />
@@ -89,21 +87,19 @@
 					class="cursor-pointer p-1 hover:bg-slate-800 rounded text-slate-400 hover:text-slate-100 transition-colors"
 					title="Settings">
 					<svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
-						stroke-linecap="round" stroke-linejoin="round" class="gear-icon">
+						stroke-linecap="round" stroke-linejoin="round">
 						<path
 							d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.1a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z" />
 						<circle cx="12" cy="12" r="3" />
 					</svg>
-
 				</button>
-
 			</div>
 		</div>
 
-		<div id="creation-drawer"
-			class="h-auto max-h-[1000px] overflow-y-auto transition-all duration-300 ease-in-out border-t border-slate-800/0">
+		<div id="add-task-drawer"
+			class="drawer-content max-h-0 overflow-hidden transition-all duration-300 ease-in-out border-t border-slate-800/0">
 
-			<div class="w-full max-w-md mx-auto p-4 bg-slate-900 rounded-xl border border-slate-800">
+			<div class="w-full max-w-md mx-auto p-4 bg-slate-900 rounded-t-xl border-x border-t border-slate-800">
 				<div
 					class="relative flex items-center bg-slate-950 p-1 rounded-lg border border-slate-800 selection:bg-transparent">
 
@@ -133,41 +129,26 @@
 
 				</div>
 			</div>
-			<form id="form-create-container" class="p-4 space-y-4 bg-slate-950/40 rounded-b-xl">
 
-				<div id="tasks-section" class="flex flex-col gap-2">
-					<label class="block text-[10px] font-bold uppercase tracking-wider text-slate-400 mb-1">Objective
-						Tasks</label>
-					<div id="tasks" class="flex flex-col gap-2">
-					</div>
-					<button id="add-task" type="button"
-						class="rounded-md bg-transparent text-[10px] block font-bold hover:bg-slate-800 hover:text-white text-gray-600 py-1.5 transition duration-300 ease-in-out border border-slate-500 focus:outline-none w-full"
-						title="Create Tasks">
-						+ Task
-					</button>
+			<form id="form-create-container" class="p-4 space-y-3 bg-slate-950/40 rounded-b-xl border-x border-b border-slate-800">
+
+				<div id="tasks-section" class="flex flex-col gap-1">
+					<label class="block text-[10px] font-bold uppercase tracking-wider text-slate-400">Primary Objective</label>
+					<input type="text" id="task-title" name="task-title" required placeholder="What are you working on?"
+						class="w-full bg-slate-900 border border-slate-700 rounded px-2.5 py-1.5 text-xs text-slate-100 focus:outline-none focus:border-indigo-500 placeholder:text-slate-500" />
 				</div>
 
-				<div id="grid-section" class="grid grid-cols-2 gap-3">
-					<div class="flex flex-col gap-2">
-						<label class="block text-[10px] font-bold uppercase tracking-wider text-slate-400 mb-1">Setup Tasks</label>
-						<div id="setup" class="flex flex-col gap-2">
-						</div>
-						<button id="add-setup" type="button"
-							class="rounded-md bg-transparent text-[10px] block font-bold hover:bg-slate-800 hover:text-white text-gray-600 py-1.5 transition duration-300 ease-in-out border border-slate-500 focus:outline-none w-full"
-							title="Create Setup">
-							+ Setup
-						</button>
+				<div id="grid-section" class="grid grid-cols-2 gap-2">
+					<div id="setup-section" class="flex flex-col gap-1">
+						<label class="block text-[10px] font-bold uppercase tracking-wider text-slate-400">Action Trigger (Start)</label>
+						<input type="text" id="action-trigger" name="action-trigger" placeholder="e.g. Open main.ts line 42"
+							class="w-full bg-slate-900 border border-slate-700 rounded px-2.5 py-1.5 text-xs text-slate-100 focus:outline-none focus:border-indigo-500 placeholder:text-slate-500" />
 					</div>
 
-					<div class="flex flex-col gap-2">
-						<label class="block text-[10px] font-bold uppercase tracking-wider text-slate-400 mb-1">Break Tasks</label>
-						<div id="breaks" class="flex flex-col gap-2">
-						</div>
-						<button id="add-break" type="button"
-							class="rounded-md bg-transparent text-[10px] block font-bold hover:bg-slate-800 hover:text-white text-gray-600 py-1.5 transition duration-300 ease-in-out border border-slate-500 focus:outline-none w-full"
-							title="Create Breaks">
-							+ Break
-						</button>
+					<div id="break-section" class="flex flex-col gap-1">
+						<label class="block text-[10px] font-bold uppercase tracking-wider text-slate-400">Definition of Done (Stop)</label>
+						<input type="text" id="definition-of-done" name="definition-of-done" placeholder="e.g. Completed Unit Tests"
+							class="w-full bg-slate-900 border border-slate-700 rounded px-2.5 py-1.5 text-xs text-slate-100 focus:outline-none focus:border-indigo-500 placeholder:text-slate-500" />
 					</div>
 				</div>
 
@@ -192,12 +173,30 @@
 
 				<div class="flex justify-center pt-1">
 					<button type="submit"
-						class="cursor-pointer bg-indigo-600 hover:bg-indigo-500 active:bg-indigo-700 text-slate-100 text-xs font-semibold px-3 py-1.5 rounded transition-colors shadow-md">
+						class="cursor-pointer bg-indigo-600 hover:bg-indigo-500 active:bg-indigo-700 text-slate-100 text-xs font-semibold px-4 py-1.5 rounded transition-colors shadow-md">
 						Deploy Container
 					</button>
 				</div>
 			</form>
 		</div>
+
+		<div id="add-cue-drawer"
+			class="drawer-content max-h-0 overflow-hidden transition-all duration-300 ease-in-out border-t border-slate-800/0 gap-2">
+			<div class="p-4 bg-slate-950/90 rounded-b-xl border-x border-b border-slate-800 text-xs text-slate-300">
+				<p class="font-semibold text-indigo-400 mb-1">System Cue / Anchor</p>
+				<p class="text-[11px] text-slate-400">Set a contextual trigger or time anchor for high-level daily scaffolding.</p>
+			</div>
+			<div class="flex justify-center pt-1">
+				<button type="button"
+          class="cursor-pointer bg-indigo-600 hover:bg-indigo-500 active:bg-indigo-700 text-slate-100 text-xs font-semibold px-4 py-1.5 rounded transition-colors shadow-md w-full p-2">
+				+ Add Cue
+				</button>
+			</div>
+			<div id="curr-cue-list"
+				class="rounded-b-xl bg-slate-950/90 border-x border-b border-slate-800">	
+			</div>	
+		</div>
+
 	</div>
 </body>
 
