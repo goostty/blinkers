@@ -21,7 +21,7 @@
 <body class="bg-transparent antialiased text-slate-200 selection:bg-transparent p-2">
 
 	<div id="widget-container" data-tauri-drag-region
-		class="w-full max-w-md mx-auto bg-slate-900/95 backdrop-blur-md border border-slate-700/50 rounded-xl shadow-2xl transition-all duration-300 ease-in-out">
+		class="w-full max-w-lg mx-auto bg-slate-900/95 backdrop-blur-md border border-slate-700/50 rounded-xl shadow-2xl transition-all duration-300 ease-in-out">
 
 		<div data-tauri-drag-region
 			class="flex items-center justify-between px-4 py-2.5 cursor-grab active:cursor-grabbing">
@@ -99,104 +99,227 @@
 		<div id="add-task-drawer"
 			class="drawer-content max-h-0 overflow-hidden transition-all duration-300 ease-in-out border-t border-slate-800/0">
 
-			<div class="w-full max-w-md mx-auto p-4 bg-slate-900 rounded-t-xl border-x border-t border-slate-800">
+			<div class="w-full mx-auto p-4 pb-0 bg-slate-900 border-x border-slate-800">
 				<div
-					class="relative flex items-center bg-slate-950 p-1 rounded-lg border border-slate-800 selection:bg-transparent">
+					class="relative flex items-center bg-slate-950 p-1 rounded-xl border border-slate-800 selection:bg-transparent">
 
 					<div id="tab-overlay"
-						class="absolute top-1 bottom-1 left-1 w-[calc(25%-4px)] bg-indigo-600 rounded-md shadow-md transition-all duration-300 ease-in-out z-0">
+						class="absolute top-1 bottom-1 left-1 w-[calc(25%-4px)] bg-indigo-600 rounded-lg shadow-md transition-all duration-300 ease-in-out z-0">
 					</div>
 
 					<button id="deep-work" type="button"
-						class="relative flex-1 py-2 text-center text-xs font-medium text-slate-100 z-10 focus:outline-none transition-colors duration-200">
+						class="relative flex-1 py-3 text-center text-sm font-medium z-10 focus:outline-none transition-colors duration-200 text-slate-100">
 						🧠 Deep
 					</button>
 
 					<button id="routine-block" type="button"
-						class="relative flex-1 py-2 text-center text-xs font-medium text-slate-400 z-10 focus:outline-none transition-colors duration-200 hover:text-slate-200">
+						class="relative flex-1 py-3 text-center text-sm font-medium z-10 focus:outline-none transition-colors duration-200 text-slate-400 hover:text-slate-200">
 						⚙️ Routine
 					</button>
 
 					<button id="reset-block" type="button"
-						class="relative flex-1 py-2 text-center text-xs font-medium text-slate-400 z-10 focus:outline-none transition-colors duration-200 hover:text-slate-200">
+						class="relative flex-1 py-3 text-center text-sm font-medium z-10 focus:outline-none transition-colors duration-200 text-slate-400 hover:text-slate-200">
 						🧹 Reset
 					</button>
 
 					<button id="recharge-block" type="button"
-						class="relative flex-1 py-2 text-center text-xs font-medium text-slate-400 z-10 focus:outline-none transition-colors duration-200 hover:text-slate-200">
+						class="relative flex-1 py-3 text-center text-sm font-medium z-10 focus:outline-none transition-colors duration-200 text-slate-400 hover:text-slate-200">
 						🔋 Recharge
 					</button>
 
 				</div>
 			</div>
 
-			<form id="form-create-container" class="p-4 space-y-3 bg-slate-950/40 rounded-b-xl border-x border-b border-slate-800">
+			<form id="form-create-container" class="p-5 space-y-5 bg-slate-950/40 rounded-b-xl border-x border-b border-slate-800">
 
-				<div id="tasks-section" class="flex flex-col gap-1">
-					<label class="block text-[10px] font-bold uppercase tracking-wider text-slate-400">Primary Objective</label>
+				<div id="tasks-section" class="flex flex-col gap-2">
+					<label for="task-title" class="block text-xs font-semibold uppercase tracking-wider text-slate-400">Primary Objective</label>
 					<input type="text" id="task-title" name="task-title" required placeholder="What are you working on?"
-						class="w-full bg-slate-900 border border-slate-700 rounded px-2.5 py-1.5 text-xs text-slate-100 focus:outline-none focus:border-indigo-500 placeholder:text-slate-500" />
+						class="w-full bg-slate-900 border border-slate-700 rounded-lg px-3.5 py-3 text-sm text-slate-100 focus:outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 placeholder:text-slate-500 transition-colors" />
 				</div>
 
-				<div id="grid-section" class="grid grid-cols-2 gap-2">
-					<div id="setup-section" class="flex flex-col gap-1">
-						<label class="block text-[10px] font-bold uppercase tracking-wider text-slate-400">Action Trigger (Start)</label>
+				<div id="grid-section" class="grid grid-cols-2 gap-4">
+					<div id="setup-section" class="flex flex-col gap-2">
+						<label for="action-trigger" class="block text-xs font-semibold uppercase tracking-wider text-slate-400">Action Trigger (Start)</label>
 						<input type="text" id="action-trigger" name="action-trigger" placeholder="e.g. Open main.ts line 42"
-							class="w-full bg-slate-900 border border-slate-700 rounded px-2.5 py-1.5 text-xs text-slate-100 focus:outline-none focus:border-indigo-500 placeholder:text-slate-500" />
+							class="w-full bg-slate-900 border border-slate-700 rounded-lg px-3.5 py-3 text-sm text-slate-100 focus:outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 placeholder:text-slate-500 transition-colors" />
 					</div>
 
-					<div id="break-section" class="flex flex-col gap-1">
-						<label class="block text-[10px] font-bold uppercase tracking-wider text-slate-400">Definition of Done (Stop)</label>
+					<div id="break-section" class="flex flex-col gap-2">
+						<label for="definition-of-done" class="block text-xs font-semibold uppercase tracking-wider text-slate-400">Definition of Done (Stop)</label>
 						<input type="text" id="definition-of-done" name="definition-of-done" placeholder="e.g. Completed Unit Tests"
-							class="w-full bg-slate-900 border border-slate-700 rounded px-2.5 py-1.5 text-xs text-slate-100 focus:outline-none focus:border-indigo-500 placeholder:text-slate-500" />
+							class="w-full bg-slate-900 border border-slate-700 rounded-lg px-3.5 py-3 text-sm text-slate-100 focus:outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 placeholder:text-slate-500 transition-colors" />
+					</div>
+
+					<div id="apps-section" class="col-span-2 flex flex-col gap-3 p-4 bg-slate-900/60 border border-slate-800 rounded-xl">
+						<label class="block text-xs font-semibold uppercase tracking-wider text-slate-400">Open on Start</label>
+
+						<div id="app-selected" class="flex flex-wrap gap-2 empty:hidden"></div>
+
+						<button type="button" id="btn-open-app-picker"
+							class="cursor-pointer w-full py-3 text-sm font-semibold text-indigo-300 border border-dashed border-slate-700 hover:border-indigo-500 hover:bg-indigo-500/10 rounded-lg transition-colors">
+							+ Add website URL / app
+						</button>
 					</div>
 				</div>
 
-				<div id="duration-section" class="grid grid-cols-2 gap-3 hidden">
-					<div class="flex flex-col gap-1.5">
-						<label class="block text-[10px] font-bold uppercase tracking-wider text-slate-400">Target Time</label>
-						<div class="flex items-center gap-1.5 bg-slate-900 border border-slate-800 rounded px-2 py-1">
+				<div id="duration-section" class="grid grid-cols-2 gap-4">
+					<div class="flex flex-col gap-2">
+						<label class="block text-xs font-semibold uppercase tracking-wider text-slate-400">Target Time</label>
+						<div class="flex items-center gap-2 bg-slate-900 border border-slate-700 rounded-lg px-3.5 py-3">
 							<input type="number" id="recharge-duration" min="5" max="180" value="30"
-								class="w-full bg-transparent text-xs text-slate-200 font-mono focus:outline-none" />
-							<span class="text-[10px] text-slate-500 font-semibold uppercase">Min</span>
+								class="w-full bg-transparent text-sm text-slate-100 font-mono focus:outline-none" />
+							<span class="text-xs text-slate-500 font-semibold uppercase">Min</span>
 						</div>
 					</div>
-					<div class="flex flex-col gap-1.5">
-						<label class="block text-[10px] font-bold uppercase tracking-wider text-slate-400">Max Cap Limit</label>
-						<div class="flex items-center gap-1.5 bg-slate-900 border border-slate-800 rounded px-2 py-1">
+					<div class="flex flex-col gap-2">
+						<label class="block text-xs font-semibold uppercase tracking-wider text-slate-400">Max Cap Limit</label>
+						<div class="flex items-center gap-2 bg-slate-900 border border-slate-700 rounded-lg px-3.5 py-3">
 							<input type="number" id="recharge-max-time" min="5" max="240" value="45"
-								class="w-full bg-transparent text-xs text-slate-200 font-mono focus:outline-none" />
-							<span class="text-[10px] text-slate-500 font-semibold uppercase">Min</span>
+								class="w-full bg-transparent text-sm text-slate-100 font-mono focus:outline-none" />
+							<span class="text-xs text-slate-500 font-semibold uppercase">Min</span>
 						</div>
 					</div>
 				</div>
 
-				<div class="flex justify-center pt-1">
-					<button type="submit"
-						class="cursor-pointer bg-indigo-600 hover:bg-indigo-500 active:bg-indigo-700 text-slate-100 text-xs font-semibold px-4 py-1.5 rounded transition-colors shadow-md">
-						Deploy Container
-					</button>
-				</div>
+				<button type="submit"
+					class="cursor-pointer w-full bg-indigo-600 hover:bg-indigo-500 active:bg-indigo-700 text-slate-100 text-sm font-semibold py-3 rounded-lg transition-colors shadow-md">
+					Deploy Container
+				</button>
 			</form>
 		</div>
 
 		<div id="add-cue-drawer"
-			class="drawer-content max-h-0 overflow-hidden transition-all duration-300 ease-in-out border-t border-slate-800/0 gap-2">
-			<div class="p-4 bg-slate-950/90 rounded-b-xl border-x border-b border-slate-800 text-xs text-slate-300">
-				<p class="font-semibold text-indigo-400 mb-1">System Cue / Anchor</p>
-				<p class="text-[11px] text-slate-400">Set a contextual trigger or time anchor for high-level daily scaffolding.</p>
-			</div>
-			<div class="flex justify-center pt-1">
-				<button type="button"
-          class="cursor-pointer bg-indigo-600 hover:bg-indigo-500 active:bg-indigo-700 text-slate-100 text-xs font-semibold px-4 py-1.5 rounded transition-colors shadow-md w-full p-2">
-				+ Add Cue
+			class="drawer-content max-h-0 overflow-hidden transition-all duration-300 ease-in-out border-t border-slate-800/0">
+			<div class="p-5 space-y-4 bg-slate-950/40 rounded-b-xl border-x border-b border-slate-800">
+				<div class="flex flex-col gap-2">
+					<span class="block text-xs font-semibold uppercase tracking-wider text-slate-400">Your Rhythm</span>
+					<div id="chronotype-options" class="grid grid-cols-3 gap-1.5 p-1 bg-slate-950 border border-slate-800 rounded-xl">
+						<button type="button" data-chronotype="morning"
+							class="py-2.5 text-sm font-medium rounded-lg text-slate-400 hover:text-slate-200 transition-colors">🌅 Morning</button>
+						<button type="button" data-chronotype="neutral"
+							class="py-2.5 text-sm font-medium rounded-lg text-slate-400 hover:text-slate-200 transition-colors">🌤️ Neutral</button>
+						<button type="button" data-chronotype="night"
+							class="py-2.5 text-sm font-medium rounded-lg text-slate-400 hover:text-slate-200 transition-colors">🌙 Night owl</button>
+					</div>
+					<p class="text-xs text-slate-500">When you do your best thinking. Afternoons are a dip for everyone, but this moves your peak earlier or later.</p>
+				</div>
+
+				<div class="flex flex-col gap-1">
+					<span class="block text-xs font-semibold uppercase tracking-wider text-slate-400">Your Cues</span>
+					<p class="text-xs text-slate-500">Moments in your day you can rely on, like after school or after dinner. Blocks are scheduled around them.</p>
+				</div>
+
+				<ul id="curr-cue-list" class="flex flex-col gap-2 max-h-[300px] overflow-y-auto pr-1 empty:hidden"></ul>
+				<p id="cue-empty" class="text-sm text-slate-500 text-center py-4 border border-dashed border-slate-800 rounded-lg">No cues yet.</p>
+				<p id="cue-list-error" hidden class="text-xs text-rose-400"></p>
+
+				<button type="button" id="btn-add-cue"
+					class="cursor-pointer w-full bg-indigo-600 hover:bg-indigo-500 active:bg-indigo-700 text-slate-100 text-sm font-semibold py-3 rounded-lg transition-colors shadow-md">
+					+ Add Cue
 				</button>
 			</div>
-			<div id="curr-cue-list"
-				class="rounded-b-xl bg-slate-950/90 border-x border-b border-slate-800">	
-			</div>	
 		</div>
 
+	</div>
+	<div id="app-picker" hidden
+		class="fixed inset-2 z-50 flex flex-col gap-4 p-5 bg-slate-950/95 backdrop-blur-md border border-slate-700/60 rounded-xl shadow-2xl">
+
+		<div class="flex items-center justify-between">
+			<span class="block text-xs font-semibold uppercase tracking-wider text-slate-400">Add to Open on Start</span>
+			<button type="button" id="btn-picker-close" title="Cancel"
+				class="cursor-pointer p-1 text-slate-400 hover:text-slate-100 hover:bg-slate-800 rounded transition-colors">
+				<svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24">
+					<path stroke-linecap="round" stroke-linejoin="round" d="M6 6l12 12M18 6L6 18" />
+				</svg>
+			</button>
+		</div>
+
+		<div class="relative flex items-center bg-slate-900 p-1 rounded-xl border border-slate-800">
+			<button type="button" id="app-mode-website"
+				class="flex-1 py-2.5 text-sm font-medium rounded-lg bg-indigo-600 text-slate-100 transition-colors">
+				🌐 Website
+			</button>
+			<button type="button" id="app-mode-app"
+				class="flex-1 py-2.5 text-sm font-medium rounded-lg text-slate-400 hover:text-slate-200 transition-colors">
+				📱 App
+			</button>
+		</div>
+
+		<div id="app-pane-website" class="flex flex-col gap-3">
+			<label for="app-url" class="block text-xs font-semibold uppercase tracking-wider text-slate-400">Exact page URL</label>
+			<input type="url" id="app-url" placeholder="https://github.com/org/repo/pull/12"
+				class="w-full bg-slate-900 border border-slate-700 rounded-lg px-3.5 py-3 text-sm text-slate-100 focus:outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 placeholder:text-slate-500 transition-colors" />
+			<div class="flex justify-end gap-2">
+				<button type="button" id="btn-website-cancel" class="cursor-pointer px-4 py-3 text-sm font-semibold text-slate-300 bg-slate-800 hover:bg-slate-700 rounded-lg transition-colors">Cancel</button>
+				<button type="button" id="btn-website-add" class="cursor-pointer px-4 py-3 text-sm font-semibold text-slate-100 bg-indigo-600 hover:bg-indigo-500 active:bg-indigo-700 rounded-lg transition-colors shadow-md">Add</button>
+			</div>
+		</div>
+
+		<div id="app-pane-app" hidden class="flex flex-col gap-3 min-h-0 flex-1">
+			<input type="text" id="app-filter" placeholder="Filter apps…" autocomplete="off"
+				class="w-full bg-slate-900 border border-slate-700 rounded-lg px-3.5 py-3 text-sm text-slate-100 focus:outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 placeholder:text-slate-500 transition-colors" />
+			<ul id="app-list" class="flex-1 min-h-0 overflow-y-auto flex flex-col gap-1.5 pr-1"></ul>
+			<p id="app-list-empty" hidden class="text-sm text-slate-500 text-center py-4">No apps match your filter.</p>
+			<div class="flex justify-end">
+				<button type="button" id="btn-app-cancel" class="cursor-pointer px-4 py-3 text-sm font-semibold text-slate-300 bg-slate-800 hover:bg-slate-700 rounded-lg transition-colors">Cancel</button>
+			</div>
+		</div>
+
+		<p id="app-error" hidden class="text-xs text-rose-400"></p>
+	</div>
+	<div id="cue-modal" hidden
+		class="fixed inset-2 z-50 flex flex-col gap-4 p-5 overflow-y-auto bg-slate-950/95 backdrop-blur-md border border-slate-700/60 rounded-xl shadow-2xl">
+
+		<div class="flex items-center justify-between">
+			<span id="cue-modal-title" class="block text-xs font-semibold uppercase tracking-wider text-slate-400">New Cue</span>
+			<button type="button" id="btn-cue-close" title="Cancel"
+				class="cursor-pointer p-1 text-slate-400 hover:text-slate-100 hover:bg-slate-800 rounded transition-colors">
+				<svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24">
+					<path stroke-linecap="round" stroke-linejoin="round" d="M6 6l12 12M18 6L6 18" />
+				</svg>
+			</button>
+		</div>
+
+		<div class="flex flex-col gap-2">
+			<label for="cue-label" class="block text-xs font-semibold uppercase tracking-wider text-slate-400">Name</label>
+			<input type="text" id="cue-label" maxlength="40" placeholder="e.g. After school" autocomplete="off"
+				class="w-full bg-slate-900 border border-slate-700 rounded-lg px-3.5 py-3 text-sm text-slate-100 focus:outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 placeholder:text-slate-500 transition-colors" />
+		</div>
+
+		<div class="flex flex-col gap-2">
+			<label for="cue-time" class="block text-xs font-semibold uppercase tracking-wider text-slate-400">At</label>
+			<input type="time" id="cue-time" class="w-full bg-slate-900 border border-slate-700 rounded-lg px-3.5 py-3 text-sm text-slate-100 focus:outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 placeholder:text-slate-500 transition-colors [color-scheme:dark]" />
+		</div>
+
+		<div class="flex flex-col gap-2">
+			<span class="block text-xs font-semibold uppercase tracking-wider text-slate-400">Days</span>
+			<div id="cue-days" class="grid grid-cols-7 gap-1.5"></div>
+			<div class="flex gap-2">
+				<button type="button" data-preset="weekdays" class="cursor-pointer px-3 py-1.5 text-xs font-medium text-slate-300 bg-slate-800 hover:bg-slate-700 rounded-full transition-colors">Weekdays</button>
+				<button type="button" data-preset="weekends" class="cursor-pointer px-3 py-1.5 text-xs font-medium text-slate-300 bg-slate-800 hover:bg-slate-700 rounded-full transition-colors">Weekends</button>
+				<button type="button" data-preset="all" class="cursor-pointer px-3 py-1.5 text-xs font-medium text-slate-300 bg-slate-800 hover:bg-slate-700 rounded-full transition-colors">Every day</button>
+			</div>
+		</div>
+
+		<div class="flex flex-col gap-2">
+			<label for="cue-flex" class="block text-xs font-semibold uppercase tracking-wider text-slate-400">Flexibility</label>
+			<select id="cue-flex" class="w-full bg-slate-900 border border-slate-700 rounded-lg px-3.5 py-3 text-sm text-slate-100 focus:outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 placeholder:text-slate-500 transition-colors [color-scheme:dark]">
+				<option value="0">Exact times</option>
+				<option value="5">± 5 min</option>
+				<option value="10">± 10 min</option>
+				<option value="15">± 15 min</option>
+				<option value="30">± 30 min</option>
+			</select>
+			<p class="text-xs text-slate-500">How far your real start can drift either way. The planner uses the exact time, and two cues can not sit closer together than their flex allows.</p>
+		</div>
+
+		<p id="cue-error" hidden class="text-xs text-rose-400"></p>
+
+		<div class="flex justify-end gap-2 mt-auto">
+			<button type="button" id="btn-cue-cancel" class="cursor-pointer px-4 py-3 text-sm font-semibold text-slate-300 bg-slate-800 hover:bg-slate-700 rounded-lg transition-colors">Cancel</button>
+			<button type="button" id="btn-cue-save" class="cursor-pointer px-4 py-3 text-sm font-semibold text-slate-100 bg-indigo-600 hover:bg-indigo-500 active:bg-indigo-700 rounded-lg transition-colors shadow-md">Save Cue</button>
+		</div>
 	</div>
 </body>
 
