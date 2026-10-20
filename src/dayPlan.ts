@@ -1,5 +1,5 @@
 import { dayCapacity, rolledByCaps, type CapBlock } from './caps';
-import { formatClock, type Cue, type Weekday } from './cues';
+import { cueRunsOn, formatClock, type Cue, type Weekday } from './cues';
 import type { BlockType, Urgency } from './scheduler';
 import { buildTimeline, removeFromChains, type TimelineBlock, type TimelineCue } from './timeline';
 
@@ -56,9 +56,13 @@ export interface DayPlan {
 //   3. the rest of each chain closes up around anything removed, and times are worked out
 //      from the links (timeline.ts)
 // Blocks that did not fit before the next cue also roll to tomorrow.
-export function planDay(blocks: DayBlock[], cues: Cue[], weekday: Weekday): DayPlan {
+//
+// `isoDate` is today's date, needed for cues that belong to one date. Without it only weekly
+// cues run: a dated cue is never assumed to be today's.
+export function planDay(blocks: DayBlock[], cues: Cue[], weekday: Weekday, isoDate?: string): DayPlan {
+  const today = { isoDate: isoDate ?? '', weekday };
   const todaysCues: TimelineCue[] = cues
-    .filter((c) => c.days.includes(weekday))
+    .filter((c) => cueRunsOn(c, today))
     .map((c) => ({ id: c.id, timeMin: c.timeMin, endsDay: c.endsDay }));
 
   const dropped = new Set(blocks.filter((b) => b.urgency === 'neither').map((b) => b.id));

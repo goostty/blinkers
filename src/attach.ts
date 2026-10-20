@@ -1,4 +1,4 @@
-import { formatClock, type Cue, type Result, type Weekday } from './cues';
+import { cueRunsOn, formatClock, type Cue, type Result, type Weekday } from './cues';
 import type { DayBlock, DayPlan } from './dayPlan';
 import type { BlockType, Urgency } from './scheduler';
 
@@ -24,11 +24,18 @@ const TYPE_LABEL: Record<BlockType, string> = {
 // which cannot hold blocks), each followed by the blocks already in its chain, in order. A block
 // with no place today (waiting to be attached, moved to tomorrow, advised to drop) is left out,
 // since nothing can follow something that is not in the day.
-export function attachOptions(cues: Cue[], blocks: DayBlock[], plan: DayPlan, weekday: Weekday): AttachOption[] {
+export function attachOptions(
+  cues: Cue[],
+  blocks: DayBlock[],
+  plan: DayPlan,
+  weekday: Weekday,
+  isoDate?: string,
+): AttachOption[] {
   const byId = new Map(blocks.map((b) => [b.id, b]));
   const options: AttachOption[] = [];
 
-  const todays = cues.filter((c) => c.days.includes(weekday) && !c.endsDay).sort((a, b) => a.timeMin - b.timeMin);
+  const today = { isoDate: isoDate ?? '', weekday };
+  const todays = cues.filter((c) => cueRunsOn(c, today) && !c.endsDay).sort((a, b) => a.timeMin - b.timeMin);
   for (const cue of todays) {
     options.push({ value: `cue:${cue.id}`, label: `After ${cue.label} · ${formatClock(cue.timeMin)}` });
 

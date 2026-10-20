@@ -398,6 +398,15 @@
 		</div>
 
 		<div class="flex flex-col gap-2">
+			<span class="block text-xs font-semibold uppercase tracking-wider text-slate-400">Repeats</span>
+			<div id="cue-repeat" class="grid grid-cols-2 gap-1.5 p-1 bg-slate-950 border border-slate-800 rounded-xl">
+				<button type="button" data-repeat="weekly" aria-pressed="true" class="cursor-pointer py-2.5 text-sm font-medium rounded-lg text-slate-400 hover:text-slate-200 transition-colors">Every week</button>
+				<button type="button" data-repeat="once" aria-pressed="false" class="cursor-pointer py-2.5 text-sm font-medium rounded-lg text-slate-400 hover:text-slate-200 transition-colors">Just today</button>
+			</div>
+			<p id="cue-once-note" hidden class="text-xs text-slate-500">This cue runs today only and disappears tomorrow. Use it for a plan that is not part of your routine.</p>
+		</div>
+
+		<div id="cue-days-section" class="flex flex-col gap-2">
 			<span class="block text-xs font-semibold uppercase tracking-wider text-slate-400">Days</span>
 			<div id="cue-days" class="grid grid-cols-7 gap-1.5"></div>
 			<div class="flex gap-2">

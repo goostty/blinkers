@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  cueRunsOn,
   cueSpan,
   cuesOverlap,
   formatClock,
@@ -7,6 +8,7 @@ import {
   parseClock,
   parseCue,
   toClockValue,
+  weekdayOf,
   type Cue,
   type CueInput,
   type Weekday,
@@ -157,5 +159,84 @@ describe('cuesOverlap', () => {
   it('is symmetric', () => {
     const other = input({ timeMin: 5, days: [0], flexMin: 10 });
     expect(cuesOverlap(other, satLate)).toBe(true);
+  });
+});
+
+// 2026-10-21 is a Wednesday (3); 2026-10-12 is a Monday (1).
+const WED = '2026-10-21';
+
+describe('weekdayOf', () => {
+  it('names the weekday of a date, 0 = Sunday', () => {
+    expect(weekdayOf('2026-10-18')).toBe(0);
+    expect(weekdayOf('2026-10-12')).toBe(1);
+    expect(weekdayOf(WED)).toBe(3);
+    expect(weekdayOf('2026-10-24')).toBe(6);
+  });
+
+  it('agrees with the backend across a year boundary and a leap day', () => {
+    expect(weekdayOf('2026-01-01')).toBe(4); // Thursday
+    expect(weekdayOf('2028-02-29')).toBe(2); // Tuesday
+  });
+});
+
+describe('cueRunsOn', () => {
+  const day = (isoDate: string) => ({ isoDate, weekday: weekdayOf(isoDate) });
+
+  it('runs a weekly cue on each of its weekdays', () => {
+    const weekly = { days: [1, 3] as Weekday[] };
+    expect(cueRunsOn(weekly, day('2026-10-12'))).toBe(true); // Monday
+    expect(cueRunsOn(weekly, day(WED))).toBe(true);
+    expect(cueRunsOn(weekly, day('2026-10-13'))).toBe(false); // Tuesday
+  });
+
+  it('runs a cue with a date on that date only, even the same weekday a week later', () => {
+    const once = { days: [3] as Weekday[], onDate: WED };
+    expect(cueRunsOn(once, day(WED))).toBe(true);
+    expect(cueRunsOn(once, day('2026-10-28'))).toBe(false); // next Wednesday
+    expect(cueRunsOn(once, day('2026-10-22'))).toBe(false);
+  });
+
+  it('treats a missing or null date as a weekly cue', () => {
+    expect(cueRunsOn({ days: [3], onDate: null }, day(WED))).toBe(true);
+    expect(cueRunsOn({ days: [3] }, day(WED))).toBe(true);
+  });
+});
+
+describe('parseCue with a date', () => {
+  it('needs no days picked, and takes the weekday from the date', () => {
+    const r = parseCue(input({ days: [], onDate: WED }), []);
+    expect(r).toEqual({ ok: true, value: input({ days: [3], onDate: WED }) });
+  });
+
+  it('ignores whatever days were sent, since the date decides', () => {
+    const r = parseCue(input({ days: [1, 2], onDate: WED }), []);
+    expect(r.ok && r.value.days).toEqual([3]);
+  });
+
+  it('refuses a date that is not a date', () => {
+    for (const bad of ['', 'today', '2026-13-01', '21-10-2026', '2026-10-32']) {
+      expect(parseCue(input({ onDate: bad }), []).ok, bad).toBe(false);
+    }
+  });
+
+  it('leaves an ordinary cue exactly as it was, with no date field at all', () => {
+    const r = parseCue(input(), []);
+    expect(r.ok && 'onDate' in r.value).toBe(false);
+  });
+
+  it('still refuses a time that clashes with a weekly cue running that day', () => {
+    const lunch: Cue = { id: 'lunch', ...input({ label: 'Lunch', timeMin: 720, days: [3] }) };
+    const r = parseCue(input({ timeMin: 720, days: [], onDate: WED }), [lunch]);
+    expect(r).toEqual({ ok: false, error: 'Overlaps with "Lunch".' });
+  });
+
+  it('allows the same time when the weekly cue does not run on that weekday', () => {
+    const mondays: Cue = { id: 'm', ...input({ label: 'Mondays', timeMin: 720, days: [1] }) };
+    expect(parseCue(input({ timeMin: 720, days: [], onDate: WED }), [mondays]).ok).toBe(true);
+  });
+
+  it('allows the same time as a cue that belongs to a different date', () => {
+    const other: Cue = { id: 'o', ...input({ label: 'Other day', timeMin: 720, days: [3], onDate: '2026-10-28' }) };
+    expect(parseCue(input({ timeMin: 720, days: [], onDate: WED }), [other]).ok).toBe(true);
   });
 });

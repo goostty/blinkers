@@ -13,6 +13,9 @@ export interface CueInput {
   days: Weekday[];
   flexMin: number; // +/- minutes
   endsDay: boolean;
+  // YYYY-MM-DD. A cue with a date belongs to that one day (a midday plan made for today) instead of
+  // repeating every week. The backend sends null for an ordinary cue.
+  onDate?: string | null;
 }
 
 export interface Cue extends CueInput {
@@ -21,6 +24,34 @@ export interface Cue extends CueInput {
 
 const DAY = 1440;
 const WEEK = 7 * DAY;
+
+// Same shape check as the backend (validate_created_on): month and day ranges only, not month
+// lengths, since it is just a key for the day.
+export function isIsoDate(text: string): boolean {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(text);
+  if (!m) return false;
+  const month = Number(m[2]);
+  const day = Number(m[3]);
+  return month >= 1 && month <= 12 && day >= 1 && day <= 31;
+}
+
+// The weekday of a calendar date (0 = Sunday). Expects a date that passed isIsoDate.
+export function weekdayOf(isoDate: string): Weekday {
+  const [y, m, d] = isoDate.split('-').map(Number);
+  return new Date(y, m - 1, d).getDay() as Weekday;
+}
+
+// Whether a cue runs on a day: a cue with a date runs on that date only (the same weekday a week
+// later does not count), and one without repeats every week on its weekdays. The planner and the
+// "what does this follow" picker both ask this, so a dated cue cannot show up in one and not the
+// other. The backend has the same rule (cue_runs_on in containers.rs).
+export function cueRunsOn(
+  cue: { days: readonly number[]; onDate?: string | null },
+  day: { isoDate: string; weekday: number },
+): boolean {
+  if (cue.onDate) return cue.onDate === day.isoDate;
+  return cue.days.includes(day.weekday);
+}
 const MAX_LABEL = 40;
 export const MAX_FLEX = 120;
 
@@ -96,10 +127,19 @@ export function parseCue(input: CueInput, existing: Cue[]): Result<CueInput> {
 
   if (!isMinute(input.timeMin)) return { ok: false, error: 'Pick a valid time.' };
 
-  const days = [...new Set(input.days)].sort((x, y) => x - y);
-  if (days.length === 0) return { ok: false, error: 'Pick at least one day.' };
-  if (days.some((d) => !Number.isInteger(d) || d < 0 || d > 6)) {
-    return { ok: false, error: 'Days must be between Sunday and Saturday.' };
+  // A cue for one date has no weekdays to pick: the date decides which weekday it falls on, so
+  // any days that were sent are replaced (the overlap check below compares weekdays).
+  const onDate = input.onDate == null ? null : input.onDate.trim();
+  let days: number[];
+  if (onDate !== null) {
+    if (!isIsoDate(onDate)) return { ok: false, error: 'Pick a valid date.' };
+    days = [weekdayOf(onDate)];
+  } else {
+    days = [...new Set(input.days)].sort((x, y) => x - y);
+    if (days.length === 0) return { ok: false, error: 'Pick at least one day.' };
+    if (days.some((d) => !Number.isInteger(d) || d < 0 || d > 6)) {
+      return { ok: false, error: 'Days must be between Sunday and Saturday.' };
+    }
   }
 
   const flexMin = input.flexMin ?? 0;
@@ -110,8 +150,16 @@ export function parseCue(input: CueInput, existing: Cue[]): Result<CueInput> {
     return { ok: false, error: `Flex can be at most ${MAX_FLEX} minutes.` };
   }
 
-  const value: CueInput = { label, timeMin: input.timeMin, days: days as Weekday[], flexMin, endsDay: input.endsDay === true };
-  const clash = existing.find((c) => cuesOverlap(value, c));
+  const value: CueInput = {
+    label,
+    timeMin: input.timeMin,
+    days: days as Weekday[],
+    flexMin,
+    endsDay: input.endsDay === true,
+    ...(onDate !== null ? { onDate } : {}), // an ordinary cue carries no date field at all
+  };
+  // A cue for another date can never meet this one, so it is not a clash.
+  const clash = existing.find((c) => !(onDate !== null && c.onDate && c.onDate !== onDate) && cuesOverlap(value, c));
   if (clash) return { ok: false, error: `Overlaps with "${clash.label}".` };
 
   return { ok: true, value };

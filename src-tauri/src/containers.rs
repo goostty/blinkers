@@ -207,6 +207,16 @@ pub fn weekday_of(date: &str) -> u8 {
     ((year + year / 4 - year / 100 + year / 400 + OFFSET[(month - 1) as usize] + day).rem_euclid(7)) as u8
 }
 
+// Whether a cue runs on a day: a cue with a date runs on that date only (even the same weekday a
+// week later does not count), and one without runs every week on its weekdays. Everything that
+// decides "can a block follow this cue today" goes through here, so the two kinds cannot drift.
+pub fn cue_runs_on(on_date: Option<&str>, days: &[u8], day: &str) -> bool {
+    match on_date {
+        Some(date) => date == day,
+        None => days.contains(&weekday_of(day)),
+    }
+}
+
 fn validate_parent_kind(parent: &ParentRef) -> Result<(), String> {
     match parent.kind.as_str() {
         "cue" | "block" => Ok(()),
@@ -238,17 +248,18 @@ fn db_err(e: sqlx::Error) -> String {
 async fn check_parent(tx: &mut Tx<'_>, parent: &ParentRef, day: &str) -> Result<(), String> {
     match parent.kind.as_str() {
         "cue" => {
-            let row: Option<(String, bool)> = sqlx::query_as("SELECT days, ends_day FROM cues WHERE id = $1")
-                .bind(&parent.id)
-                .fetch_optional(&mut **tx)
-                .await
-                .map_err(db_err)?;
-            let (days, ends_day) = row.ok_or("That cue no longer exists.")?;
+            let row: Option<(String, bool, Option<String>)> =
+                sqlx::query_as("SELECT days, ends_day, on_date FROM cues WHERE id = $1")
+                    .bind(&parent.id)
+                    .fetch_optional(&mut **tx)
+                    .await
+                    .map_err(db_err)?;
+            let (days, ends_day, on_date) = row.ok_or("That cue no longer exists.")?;
             if ends_day {
                 return Err("An end-of-day cue cannot hold blocks.".into());
             }
             let days: Vec<u8> = serde_json::from_str(&days).map_err(|e| e.to_string())?;
-            if !days.contains(&weekday_of(day)) {
+            if !cue_runs_on(on_date.as_deref(), &days, day) {
                 return Err("That cue does not run on this day.".into());
             }
             Ok(())
@@ -1718,5 +1729,52 @@ mod tests {
         dismiss_block_in(&pool, &dropped).await.unwrap();
         assert!(update_block_in(&pool, &dropped, edit("x")).await.is_err());
         assert!(get_block_details_in(&pool, &dropped).await.is_err());
+    }
+
+    // --- cues that run on one date ------------------------------------------------------------
+
+    async fn insert_dated_cue(pool: &SqlitePool, id: &str, on_date: &str) {
+        sqlx::query("INSERT INTO cues (id, label, time_min, days, flex_min, ends_day, on_date) VALUES ($1, $1, 600, $2, 0, 0, $3)")
+            .bind(id)
+            .bind(format!("[{}]", weekday_of(on_date)))
+            .bind(on_date)
+            .execute(pool)
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_block_can_follow_a_cue_for_one_date_on_that_date() {
+        let pool = pool().await;
+        insert_dated_cue(&pool, "once", MON).await;
+        assert!(create(&pool, "A", "deep", Some("important"), Some(cue_ref("once")), MON).await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn a_cue_for_one_date_does_not_run_on_the_same_weekday_a_week_later() {
+        // A weekly rule would let this through (both are Mondays); the date must win.
+        let pool = pool().await;
+        insert_dated_cue(&pool, "once", MON).await;
+        let next_monday = "2026-10-19";
+        let err = create(&pool, "A", "deep", Some("important"), Some(cue_ref("once")), next_monday).await.unwrap_err();
+        assert!(err.contains("does not run"), "{err}");
+    }
+
+    #[tokio::test]
+    async fn an_ordinary_cue_still_runs_every_week_on_its_days() {
+        let pool = pool().await;
+        let cue = fresh_cue(&pool).await;
+        for day in [MON, "2026-10-19", "2026-11-02"] {
+            assert!(create(&pool, "A", "deep", Some("important"), Some(cue_ref(&cue)), day).await.is_ok(), "{day}");
+        }
+    }
+
+    #[test]
+    fn the_rule_for_whether_a_cue_runs_on_a_day() {
+        assert!(cue_runs_on(None, &[1], MON)); // Monday cue, a Monday
+        assert!(!cue_runs_on(None, &[2], MON));
+        assert!(cue_runs_on(Some(MON), &[1], MON)); // dated cue, its own date
+        assert!(!cue_runs_on(Some(MON), &[1], "2026-10-19")); // same weekday, other date
+        assert!(!cue_runs_on(Some("2026-10-13"), &[2], MON)); // a different date altogether
     }
 }

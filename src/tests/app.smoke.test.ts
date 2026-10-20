@@ -49,6 +49,7 @@ async function startApp(overrides: Record<string, Handler> = {}) {
     tick_reminders: () => ({ sent: 0, missed: 0, failed: null }),
     get_ntfy_topic: () => 'blinkers_testtopic',
     set_ntfy_topic: () => null,
+    prune_expired_cues: () => 0,
     dismiss_block: () => null,
     update_block: () => null,
     get_next_order_index: () => 0,
@@ -306,6 +307,75 @@ describe('blocks waiting for a place', () => {
     await settle();
 
     expect(called('attach_block')[0].args).toMatchObject({ blockId: 'old', parent: { kind: 'cue', id: 'morning' } });
+  });
+
+  describe('removing a block from the queue', () => {
+    let waiting: Array<Record<string, unknown>>;
+    const queueRow = () => $('unattached-list').querySelector('li');
+    const dropButton = () => [...(queueRow()?.querySelectorAll('button') ?? [])].find((b) => b.textContent === 'Drop');
+
+    beforeEach(() => {
+      waiting = [carriedOver];
+    });
+
+    it('offers Drop on every waiting block, next to Attach', async () => {
+      await startApp({ list_day_blocks: () => waiting });
+      const labels = [...queueRow()!.querySelectorAll('button')].map((b) => b.textContent);
+      expect(labels).toEqual(['Attach', 'Drop']);
+    });
+
+    it('drops the block, and the queue and the header count empty out', async () => {
+      await startApp({
+        list_day_blocks: () => waiting,
+        dismiss_block: () => {
+          waiting = [];
+          return null;
+        },
+      });
+      expect($('btn-place').hidden).toBe(false);
+
+      click(dropButton()!);
+      await until(() => queueRow() === null);
+
+      expect(called('dismiss_block')[0].args).toMatchObject({ blockId: 'old' });
+      expect(called('attach_block')).toHaveLength(0); // dropping is not attaching
+      expect($('unattached-section').hidden).toBe(true);
+      expect($('btn-place').hidden).toBe(true);
+      expect(errors).toEqual([]);
+    });
+
+    it('plans the day again after a drop, so what followed it closes up', async () => {
+      await startApp({ list_day_blocks: () => waiting, dismiss_block: () => { waiting = []; return null; } });
+      const plansBefore = called('sync_commitments').length;
+      click(dropButton()!);
+      await until(() => queueRow() === null);
+      expect(called('sync_commitments').length).toBeGreaterThan(plansBefore);
+    });
+
+    it('says why a drop failed, in the row, and keeps the block', async () => {
+      await startApp({ list_day_blocks: () => waiting, dismiss_block: () => Promise.reject('That block no longer exists.') });
+      click(dropButton()!);
+      await until(() => !(queueRow()?.querySelector('p')?.hidden ?? true));
+
+      expect(queueRow()!.textContent).toContain('no longer exists');
+      expect(queueRow()).not.toBeNull();
+    });
+
+    it('leaves the other waiting blocks alone', async () => {
+      waiting = [carriedOver, { ...carriedOver, id: 'older', title: 'Older leftover' }];
+      await startApp({
+        list_day_blocks: () => waiting,
+        dismiss_block: (a) => {
+          waiting = waiting.filter((b) => b.id !== a.blockId);
+          return null;
+        },
+      });
+      click(dropButton()!);
+      await until(() => $('unattached-list').querySelectorAll('li').length === 1);
+
+      expect($('unattached-list').textContent).toContain('Older leftover');
+      expect($('unattached-list').textContent).not.toContain('Left over ·');
+    });
   });
 
   it('asks for a choice before attaching', async () => {
@@ -887,5 +957,136 @@ describe('the Today tab and editing a block', () => {
       expect(rowButton('write', 'Edit')).toBeUndefined();
       expect(rowButton('write', 'Drop')).toBeDefined();
     });
+  });
+});
+
+describe('a cue for just today', () => {
+  const repeat = (mode: string) => document.querySelector<HTMLElement>(`[data-repeat="${mode}"]`)!;
+  const todayIso = () => {
+    const d = new Date();
+    const p = (n: number) => String(n).padStart(2, '0');
+    return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+  };
+  const dayChips = () => document.querySelectorAll('#cue-days button').length;
+
+  async function openNewCue(overrides: Record<string, Handler> = {}) {
+    await startApp(overrides);
+    click($('btn-add-cue'));
+  }
+
+  function fill(label: string, time: string) {
+    type($('cue-label'), label);
+    type($('cue-time'), time);
+  }
+
+  async function save() {
+    click($('btn-cue-save'));
+    await settle(50);
+  }
+
+  it('asks whether the cue repeats every week or is just for today, and starts on every week', async () => {
+    await openNewCue();
+    expect(repeat('weekly').getAttribute('aria-pressed')).toBe('true');
+    expect(repeat('once').getAttribute('aria-pressed')).toBe('false');
+    expect($('cue-days-section').hidden).toBe(false);
+    expect($('cue-once-note').hidden).toBe(true);
+  });
+
+  it('hides the weekdays when it is just for today, since the date decides, and says so', async () => {
+    await openNewCue();
+    click(repeat('once'));
+    expect($('cue-days-section').hidden).toBe(true);
+    expect($('cue-once-note').hidden).toBe(false);
+    expect(repeat('once').getAttribute('aria-pressed')).toBe('true');
+
+    click(repeat('weekly'));
+    expect($('cue-days-section').hidden).toBe(false);
+    expect(dayChips()).toBe(7);
+  });
+
+  it('saves a cue for today with today\'s date and no weekdays needed', async () => {
+    await openNewCue();
+    fill('Midday reset', '23:59');
+    click(repeat('once'));
+    await save();
+
+    expect(called('create_cue')[0].args.input).toMatchObject({ label: 'Midday reset', timeMin: 1439, onDate: todayIso() });
+    expect($('cue-modal').hidden).toBe(true);
+  });
+
+  it('works even when every weekday has been switched off', async () => {
+    await openNewCue();
+    fill('Midday reset', '23:59');
+    document.querySelectorAll<HTMLElement>('#cue-days button[aria-pressed="true"]').forEach((b) => click(b));
+    click(repeat('once'));
+    await save();
+    expect(called('create_cue')).toHaveLength(1);
+  });
+
+  it('refuses a time that has already passed today, because it would be missed at once', async () => {
+    await openNewCue();
+    fill('Too late', '00:00');
+    click(repeat('once'));
+    // 00:00 has passed unless this test happens to run in the first minute of the day.
+    if (new Date().getHours() === 0 && new Date().getMinutes() === 0) return;
+    await save();
+
+    expect(called('create_cue')).toHaveLength(0);
+    expect($('cue-error').textContent).toMatch(/already passed/i);
+    expect($('cue-modal').hidden).toBe(false);
+  });
+
+  it('still lets a weekly cue be at any time of day', async () => {
+    await openNewCue();
+    fill('Early', '00:00');
+    await save();
+    expect(called('create_cue')[0].args.input).not.toHaveProperty('onDate');
+  });
+
+  it('sends no date for an ordinary cue', async () => {
+    await openNewCue();
+    fill('Evening', '23:30');
+    await save();
+    expect(called('create_cue')[0].args.input).toMatchObject({ label: 'Evening', days: [0, 1, 2, 3, 4, 5, 6] });
+    expect(called('create_cue')[0].args.input).not.toHaveProperty('onDate');
+  });
+
+  it('shows a cue for today as "Today only" in the list', async () => {
+    const once = { id: 'once', label: 'Midday reset', timeMin: 23 * 60 + 59, days: [new Date().getDay()], flexMin: 0, endsDay: false, onDate: todayIso() };
+    await startApp({ list_cues: () => [once] });
+    await settle(30);
+    const row = [...document.querySelectorAll('#curr-cue-list li')].find((li) => li.textContent?.includes('Midday reset'))!;
+    expect(row.textContent).toContain('Today only');
+    expect(row.textContent).not.toContain('Every day');
+  });
+
+  it('opens an existing cue for today already set to just today, and keeps its own date when saved', async () => {
+    const once = { id: 'once', label: 'Midday reset', timeMin: 23 * 60 + 59, days: [new Date().getDay()], flexMin: 0, endsDay: false, onDate: todayIso() };
+    await startApp({ list_cues: () => [once] });
+    await settle(30);
+    click(document.querySelector('button[title="Edit Midday reset"]')!);
+
+    expect(repeat('once').getAttribute('aria-pressed')).toBe('true');
+    expect($('cue-days-section').hidden).toBe(true);
+
+    type($('cue-label'), 'Renamed reset');
+    await save();
+    expect(called('update_cue')[0].args).toMatchObject({ id: 'once', input: { label: 'Renamed reset', onDate: todayIso() } });
+  });
+
+  it('can switch a cue for today back to every week', async () => {
+    const once = { id: 'once', label: 'Midday reset', timeMin: 23 * 60 + 59, days: [new Date().getDay()], flexMin: 0, endsDay: false, onDate: todayIso() };
+    await startApp({ list_cues: () => [once] });
+    await settle(30);
+    click(document.querySelector('button[title="Edit Midday reset"]')!);
+    click(repeat('weekly'));
+    await save();
+    expect(called('update_cue')[0].args.input).not.toHaveProperty('onDate');
+  });
+
+  it('clears out cues from days gone by when the app starts', async () => {
+    await startApp();
+    await until(() => called('prune_expired_cues').length > 0);
+    expect(called('prune_expired_cues')[0].args.today).toBe(todayIso());
   });
 });

@@ -224,6 +224,10 @@ pub async fn init_cue_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     // cannot hold blocks itself.
     add_column_if_missing(pool, "cues", "ends_day", "INTEGER NOT NULL DEFAULT 0").await?;
 
+    // A cue normally repeats every week on its `days`. With a date it belongs to that one day and
+    // nowhere else (a midday plan made for today). Older cues have none, so they stay weekly.
+    add_column_if_missing(pool, "cues", "on_date", "TEXT").await?;
+
     sqlx::query(
         "CREATE TABLE IF NOT EXISTS settings (
             key TEXT PRIMARY KEY NOT NULL,
@@ -359,7 +363,7 @@ mod tests {
         init_cue_schema(&pool).await.unwrap(); // running twice must be harmless
 
         let columns: Vec<String> = sqlx::query_scalar("SELECT name FROM pragma_table_info('cues') ORDER BY cid").fetch_all(&pool).await.unwrap();
-        assert_eq!(columns, vec!["id", "label", "time_min", "days", "flex_min", "ends_day"]);
+        assert_eq!(columns, vec!["id", "label", "time_min", "days", "flex_min", "ends_day", "on_date"]);
 
         let rows: Vec<(String, i32, String, i32)> = sqlx::query_as("SELECT id, time_min, days, flex_min FROM cues ORDER BY id").fetch_all(&pool).await.unwrap();
         // The old end time is dropped; flex above the new 120 cap is clamped.
@@ -554,6 +558,6 @@ mod tests {
         let pool = SqlitePoolOptions::new().max_connections(1).connect("sqlite::memory:").await.unwrap();
         init_cue_schema(&pool).await.unwrap();
         let columns: Vec<String> = sqlx::query_scalar("SELECT name FROM pragma_table_info('cues') ORDER BY cid").fetch_all(&pool).await.unwrap();
-        assert_eq!(columns, vec!["id", "label", "time_min", "days", "flex_min", "ends_day"]);
+        assert_eq!(columns, vec!["id", "label", "time_min", "days", "flex_min", "ends_day", "on_date"]);
     }
 }

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { attachOptions, parseAttach, resolveAttach, resolveDuration } from '../attach';
 import { planDay, type DayBlock } from '../dayPlan';
-import type { Cue, Weekday } from '../cues';
+import { weekdayOf, type Cue, type Weekday } from '../cues';
 
 const MON: Weekday = 1;
 
@@ -132,5 +132,35 @@ describe('resolveDuration', () => {
 
   it.each(['', '  ', '0', '-5', '1441', '2.5', '1e2', 'abc', '30 min', '+30'])('rejects %j', (text) => {
     expect(resolveDuration(text).ok).toBe(false);
+  });
+});
+
+describe('attachOptions with cues that belong to one date', () => {
+  const WED_DATE = '2026-10-21';
+  const WED: Weekday = 3;
+  const once = (id: string, hour: number, date: string) => cue(id, hour, { days: [weekdayOf(date)], onDate: date });
+  const labels = (cues: Cue[], date?: string) => {
+    const plan = planDay([], cues, WED, date);
+    return attachOptions(cues, [], plan, WED, date).map((o) => o.label);
+  };
+
+  it('offers a cue made for today', () => {
+    expect(labels([once('midday', 13, WED_DATE)], WED_DATE)).toEqual(['After Midday · 1:00 PM']);
+  });
+
+  it('leaves out a cue made for another date, even on the same weekday', () => {
+    expect(labels([once('midday', 13, '2026-10-28')], WED_DATE)).toEqual([]);
+  });
+
+  it('leaves out dated cues when no date is given, and keeps the weekly ones', () => {
+    expect(labels([cue('morning', 9), once('midday', 13, WED_DATE)])).toEqual(['After Morning · 9:00 AM']);
+  });
+
+  it('lists today\'s cues in time order, weekly and dated together', () => {
+    expect(labels([once('midday', 13, WED_DATE), cue('morning', 9), cue('evening', 18)], WED_DATE)).toEqual([
+      'After Morning · 9:00 AM',
+      'After Midday · 1:00 PM',
+      'After Evening · 6:00 PM',
+    ]);
   });
 });

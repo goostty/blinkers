@@ -43,6 +43,7 @@ pub fn run() {
             cues::update_cue,
             cues::list_cues,
             cues::delete_cue,
+            cues::prune_expired_cues,
             cues::get_profile,
             cues::set_profile,
             ntfy::get_ntfy_topic,

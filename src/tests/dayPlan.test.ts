@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { placementText, planDay, type BlockPlacement, type DayBlock, type DayPlan } from '../dayPlan';
-import type { Cue, Weekday } from '../cues';
+import { weekdayOf, type Cue, type Weekday } from '../cues';
 import type { Urgency } from '../scheduler';
 
 const MON: Weekday = 1;
@@ -214,5 +214,40 @@ describe('placementText', () => {
     expect(placementText({ ...none, kind: 'drop' }, cues)).toBe('Consider dropping');
     expect(placementText({ ...none, kind: 'unattached' }, cues)).toBe('Needs a place today');
     expect(placementText({ ...none, kind: 'invalid' }, cues)).toBe('Needs attention');
+  });
+});
+
+describe('cues that belong to one date', () => {
+  const WED_DATE = '2026-10-21';
+  const WED: Weekday = 3;
+  const once = (id: string, hour: number, date: string) => cue(id, hour, { days: [weekdayOf(date)], onDate: date });
+
+  it('places a block after a cue made for today', () => {
+    const plan = planDay([block('b', afterCue('midday'))], [once('midday', 13, WED_DATE)], WED, WED_DATE);
+    expect(plan.plan).toEqual([{ blockId: 'b', cueId: 'midday', startMin: 780, durationMin: 30 }]);
+  });
+
+  it('does not run a cue made for another date, even on the same weekday', () => {
+    const nextWeek = once('midday', 13, '2026-10-28');
+    const plan = planDay([block('b', afterCue('midday'))], [nextWeek], WED, WED_DATE);
+    expect(plan.plan).toEqual([]);
+    expect(plan.placements[0].kind).not.toBe('placed');
+  });
+
+  it('does not run a dated cue when no date is given, rather than guessing', () => {
+    const plan = planDay([block('b', afterCue('midday'))], [once('midday', 13, WED_DATE)], WED);
+    expect(plan.plan).toEqual([]);
+  });
+
+  it('still runs weekly cues with or without a date', () => {
+    const weekly = [cue('morning', 9)];
+    expect(planDay([block('b', afterCue('morning'))], weekly, WED).plan).toHaveLength(1);
+    expect(planDay([block('b', afterCue('morning'))], weekly, WED, WED_DATE).plan).toHaveLength(1);
+  });
+
+  it('treats a cue made for today as a fixed moment, so the chain before it must fit', () => {
+    const cues = [cue('morning', 9), once('midday', 10, WED_DATE)];
+    const plan = planDay([block('long', afterCue('morning'), 90)], cues, WED, WED_DATE);
+    expect(plan.placements[0].kind).toBe('overflow'); // 9:00 + 90 min runs past the 10:00 cue
   });
 });

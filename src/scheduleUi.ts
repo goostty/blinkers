@@ -34,7 +34,7 @@ async function planToday(): Promise<LoadedDay> {
     invoke<DayBlock[]>('list_day_blocks', { on: when.isoDate }),
   ]);
 
-  const dayPlan = planDay(blocks, cues, when.weekday);
+  const dayPlan = planDay(blocks, cues, when.weekday, when.isoDate);
 
   // Saving the plan failing must not hide what the user is waiting to see.
   try {
@@ -127,7 +127,26 @@ function renderUnattached(day: LoadedDay, options: AttachOption[]) {
       await refreshDay();
     });
 
-    controls.append(select, button);
+    // A block can be given up from the queue too, so one that is no longer wanted never has to be
+    // placed first. The same action as Drop in the Today list: the block is dropped, not deleted.
+    const drop = document.createElement('button');
+    drop.type = 'button';
+    drop.textContent = 'Drop';
+    drop.title = 'Remove this block from today';
+    drop.className =
+      'cursor-pointer shrink-0 px-3 py-2 text-sm font-semibold text-slate-300 bg-slate-800 hover:bg-rose-600 hover:text-slate-100 rounded-lg transition-colors';
+    drop.addEventListener('click', async () => {
+      try {
+        await invoke('dismiss_block', { blockId: block.id });
+      } catch (err) {
+        error.textContent = typeof err === 'string' ? err : 'Could not drop that block.';
+        error.hidden = false;
+        return;
+      }
+      await refreshDay();
+    });
+
+    controls.append(select, button, drop);
     row.append(name, controls, error);
     list.append(row);
   }
@@ -138,7 +157,7 @@ function renderUnattached(day: LoadedDay, options: AttachOption[]) {
 export async function refreshDay(): Promise<LoadedDay | null> {
   try {
     const day = await planToday();
-    const options = attachOptions(day.cues, day.blocks, day.dayPlan, day.weekday);
+    const options = attachOptions(day.cues, day.blocks, day.dayPlan, day.weekday, day.isoDate);
 
     const select = el<HTMLSelectElement>('block-attach');
     if (select) fillOptions(select, options, 'Pick what it follows…');

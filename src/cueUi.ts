@@ -1,5 +1,7 @@
 import { invoke } from '@tauri-apps/api/core';
 import { cueSpan, formatClock, formatDays, parseClock, parseCue, toClockValue, type Cue, type Weekday } from './cues';
+import { describeMoment } from './scheduler';
+import { todayKey } from './scheduleUi';
 import { describeEnergy, windowEnergy, type Chronotype, type UserProfile } from './energy';
 
 const ENERGY_STYLE = {
@@ -21,6 +23,11 @@ let cues: Cue[] = [];
 let profile: UserProfile = { chronotype: 'neutral' };
 // Set while the form is editing an existing cue; null means it is creating a new one.
 let editingId: string | null = null;
+// The cue being edited as it was, so saving it again does not re-judge what the user did not touch.
+let editingCue: Cue | null = null;
+// "weekly" repeats on the chosen days; "once" belongs to a single date (today, for a new cue).
+type Repeat = 'weekly' | 'once';
+let repeat: Repeat = 'weekly';
 const selectedDays = new Set<Weekday>();
 
 const el = <T extends HTMLElement>(id: string) => document.getElementById(id) as T | null;
@@ -102,7 +109,8 @@ function renderCueList() {
     const ends = cue.endsDay ? ' · ends your day' : '';
     const detail = document.createElement('span');
     detail.className = 'text-xs text-slate-400';
-    detail.textContent = `${formatClock(cue.timeMin)} · ${formatDays(cue.days as Weekday[])}${flex}${ends}`;
+    const when = cue.onDate ? 'Today only' : formatDays(cue.days as Weekday[]);
+    detail.textContent = `${formatClock(cue.timeMin)} · ${when}${flex}${ends}`;
 
     text.append(name, detail);
 
@@ -179,6 +187,24 @@ function renderDays() {
   });
 }
 
+// Weekdays only make sense for a cue that repeats: a cue for one date is on the weekday its date
+// falls on, so the picker is hidden for it and a note explains instead.
+function setRepeat(next: Repeat) {
+  repeat = next;
+  document.querySelectorAll<HTMLElement>('[data-repeat]').forEach((btn) => {
+    const active = btn.dataset.repeat === next;
+    btn.setAttribute('aria-pressed', String(active));
+    btn.classList.toggle('bg-indigo-600', active);
+    btn.classList.toggle('text-slate-100', active);
+    btn.classList.toggle('text-slate-400', !active);
+    btn.classList.toggle('hover:text-slate-200', !active);
+  });
+  const days = el('cue-days-section');
+  if (days) days.hidden = next === 'once';
+  const note = el('cue-once-note');
+  if (note) note.hidden = next !== 'once';
+}
+
 // The flex dropdown only offers a few round values. A cue saved earlier (or migrated from the
 // old format) can carry any value up to 120, so add a matching option instead of silently
 // showing the wrong one.
@@ -201,6 +227,7 @@ function openCueModal(cue?: Cue) {
   const modal = el('cue-modal');
   if (!modal) return;
   editingId = cue?.id ?? null;
+  editingCue = cue ?? null;
 
   const title = el('cue-modal-title');
   if (title) title.textContent = cue ? 'Edit Cue' : 'New Cue';
@@ -214,6 +241,7 @@ function openCueModal(cue?: Cue) {
   selectedDays.clear();
   (cue ? (cue.days as Weekday[]) : PRESETS.all).forEach((d) => selectedDays.add(d));
   renderDays();
+  setRepeat(cue?.onDate ? 'once' : 'weekly');
   showError('cue-error', '');
   modal.hidden = false;
   el<HTMLInputElement>('cue-label')?.focus();
@@ -223,6 +251,7 @@ function closeCueModal() {
   const modal = el('cue-modal');
   if (modal) modal.hidden = true;
   editingId = null;
+  editingCue = null;
   showError('cue-error', '');
 }
 
@@ -233,6 +262,16 @@ async function saveCue() {
     return;
   }
 
+  // A cue for one date keeps the date it already had; a new one is for today. Its time must not
+  // have passed: the blocks after it would be missed the moment they were made. The backend has no
+  // clock, so this is checked here, and only when the time or the kind of cue is being changed.
+  const onDate = repeat === 'once' ? (editingCue?.onDate ?? todayKey()) : undefined;
+  const untouched = editingCue?.onDate !== undefined && editingCue?.onDate !== null && editingCue.timeMin === timeMin;
+  if (onDate !== undefined && !untouched && onDate === todayKey() && timeMin < describeMoment(new Date()).nowMin) {
+    showError('cue-error', 'That time has already passed today. Pick a later time.');
+    return;
+  }
+
   const parsed = parseCue(
     {
       label: el<HTMLInputElement>('cue-label')?.value ?? '',
@@ -240,6 +279,7 @@ async function saveCue() {
       days: [...selectedDays],
       flexMin: Number(el<HTMLSelectElement>('cue-flex')?.value ?? 0),
       endsDay: el<HTMLInputElement>('cue-ends-day')?.checked ?? false,
+      ...(onDate !== undefined ? { onDate } : {}),
     },
     // A cue being edited must not count as clashing with its own old self.
     cues.filter((c) => c.id !== editingId),
@@ -270,6 +310,10 @@ export async function initCueUi() {
 
   document.querySelectorAll<HTMLElement>('[data-chronotype]').forEach((btn) => {
     btn.addEventListener('click', () => setChronotype(btn.dataset.chronotype as Chronotype));
+  });
+
+  document.querySelectorAll<HTMLElement>('[data-repeat]').forEach((btn) => {
+    btn.addEventListener('click', () => setRepeat(btn.dataset.repeat as Repeat));
   });
 
   document.querySelectorAll<HTMLElement>('[data-preset]').forEach((btn) => {

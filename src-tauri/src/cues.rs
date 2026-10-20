@@ -1,3 +1,4 @@
+use crate::containers::{validate_created_on, weekday_of};
 use crate::db::DbState;
 use serde::{Deserialize, Serialize};
 use sqlx::SqlitePool;
@@ -19,6 +20,9 @@ pub struct CueInput {
     // A cue like "bedtime" closes the chain before it and cannot hold blocks itself.
     #[serde(default)]
     pub ends_day: bool,
+    // YYYY-MM-DD. A cue with a date runs on that day only; without one it repeats weekly on `days`.
+    #[serde(default)]
+    pub on_date: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -30,6 +34,7 @@ pub struct Cue {
     pub days: Vec<u8>,
     pub flex_min: i32,
     pub ends_day: bool,
+    pub on_date: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
@@ -72,15 +77,28 @@ pub fn validate_cue(input: CueInput) -> Result<CueInput, String> {
         return Err("Pick a valid time.".into());
     }
 
-    let mut days = input.days.clone();
-    days.sort_unstable();
-    days.dedup();
-    if days.is_empty() {
-        return Err("Pick at least one day.".into());
-    }
-    if days.iter().any(|d| *d > 6) {
-        return Err("Days must be between Sunday and Saturday.".into());
-    }
+    // A cue for one date has no weekdays to pick: the date decides which weekday it falls on, so
+    // whatever days were sent are replaced. That keeps `days` filled in for everything that reads
+    // it (the overlap check compares weekdays) without letting it disagree with the date.
+    let on_date = input.on_date.as_ref().map(|d| d.trim().to_string());
+    let days = match &on_date {
+        Some(date) => {
+            validate_created_on(date)?;
+            vec![weekday_of(date)]
+        }
+        None => {
+            let mut days = input.days.clone();
+            days.sort_unstable();
+            days.dedup();
+            if days.is_empty() {
+                return Err("Pick at least one day.".into());
+            }
+            if days.iter().any(|d| *d > 6) {
+                return Err("Days must be between Sunday and Saturday.".into());
+            }
+            days
+        }
+    };
 
     if input.flex_min < 0 {
         return Err("Flex must be zero or more whole minutes.".into());
@@ -89,7 +107,7 @@ pub fn validate_cue(input: CueInput) -> Result<CueInput, String> {
         return Err(format!("Flex can be at most {MAX_FLEX} minutes."));
     }
 
-    Ok(CueInput { label, days, ..input })
+    Ok(CueInput { label, days, on_date, ..input })
 }
 
 pub fn validate_profile(profile: &UserProfile) -> Result<(), String> {
@@ -112,6 +130,7 @@ struct CueRow {
     days: String,
     flex_min: i32,
     ends_day: bool,
+    on_date: Option<String>,
 }
 
 impl CueRow {
@@ -124,6 +143,7 @@ impl CueRow {
             days,
             flex_min: self.flex_min,
             ends_day: self.ends_day,
+            on_date: self.on_date,
         })
     }
 }
@@ -137,11 +157,12 @@ pub async fn create_cue_in(pool: &SqlitePool, input: CueInput) -> Result<Cue, St
         days: valid.days,
         flex_min: valid.flex_min,
         ends_day: valid.ends_day,
+        on_date: valid.on_date,
     };
     let days = serde_json::to_string(&cue.days).map_err(|e| e.to_string())?;
 
     sqlx::query(
-        "INSERT INTO cues (id, label, time_min, days, flex_min, ends_day) VALUES ($1, $2, $3, $4, $5, $6)",
+        "INSERT INTO cues (id, label, time_min, days, flex_min, ends_day, on_date) VALUES ($1, $2, $3, $4, $5, $6, $7)",
     )
     .bind(&cue.id)
     .bind(&cue.label)
@@ -149,6 +170,7 @@ pub async fn create_cue_in(pool: &SqlitePool, input: CueInput) -> Result<Cue, St
     .bind(days)
     .bind(cue.flex_min)
     .bind(cue.ends_day)
+    .bind(&cue.on_date)
     .execute(pool)
     .await
     .map_err(|e| e.to_string())?;
@@ -163,13 +185,14 @@ pub async fn update_cue_in(pool: &SqlitePool, id: &str, input: CueInput) -> Resu
     let days = serde_json::to_string(&valid.days).map_err(|e| e.to_string())?;
 
     let result = sqlx::query(
-        "UPDATE cues SET label = $1, time_min = $2, days = $3, flex_min = $4, ends_day = $5 WHERE id = $6",
+        "UPDATE cues SET label = $1, time_min = $2, days = $3, flex_min = $4, ends_day = $5, on_date = $6 WHERE id = $7",
     )
     .bind(&valid.label)
     .bind(valid.time_min)
     .bind(days)
     .bind(valid.flex_min)
     .bind(valid.ends_day)
+    .bind(&valid.on_date)
     .bind(id)
     .execute(pool)
     .await
@@ -186,18 +209,49 @@ pub async fn update_cue_in(pool: &SqlitePool, id: &str, input: CueInput) -> Resu
         days: valid.days,
         flex_min: valid.flex_min,
         ends_day: valid.ends_day,
+        on_date: valid.on_date,
     })
 }
 
 pub async fn list_cues_in(pool: &SqlitePool) -> Result<Vec<Cue>, String> {
     let rows = sqlx::query_as::<_, CueRow>(
-        "SELECT id, label, time_min, days, flex_min, ends_day FROM cues ORDER BY time_min, label",
+        "SELECT id, label, time_min, days, flex_min, ends_day, on_date FROM cues ORDER BY time_min, label",
     )
     .fetch_all(pool)
     .await
     .map_err(|e| e.to_string())?;
 
     rows.into_iter().map(CueRow::into_cue).collect()
+}
+
+// A cue made for one day can never run again once that day is over, so it is removed instead of
+// piling up. Blocks that followed it are freed in the same step, like when a cue is deleted by
+// hand. `today` must be a real date: this deletes by comparing against it, so a blank or garbled
+// value is refused rather than risking removing cues that are still current. Weekly cues, and
+// cues for today or later, are never touched. Returns how many were removed.
+pub async fn prune_expired_cues_in(pool: &SqlitePool, today: &str) -> Result<u64, String> {
+    validate_created_on(today)?;
+    let mut tx = pool.begin().await.map_err(|e| e.to_string())?;
+
+    sqlx::query(
+        "UPDATE containers SET parent_kind = NULL, parent_id = NULL
+         WHERE parent_kind = 'cue'
+           AND parent_id IN (SELECT id FROM cues WHERE on_date IS NOT NULL AND on_date < $1)",
+    )
+    .bind(today)
+    .execute(&mut *tx)
+    .await
+    .map_err(|e| e.to_string())?;
+
+    let removed = sqlx::query("DELETE FROM cues WHERE on_date IS NOT NULL AND on_date < $1")
+        .bind(today)
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| e.to_string())?
+        .rows_affected();
+
+    tx.commit().await.map_err(|e| e.to_string())?;
+    Ok(removed)
 }
 
 // A block that followed the deleted cue is left without a place instead of pointing at a cue that
@@ -269,6 +323,11 @@ pub async fn list_cues(state: State<'_, DbState>) -> Result<Vec<Cue>, String> {
 }
 
 #[tauri::command]
+pub async fn prune_expired_cues(today: String, state: State<'_, DbState>) -> Result<u64, String> {
+    prune_expired_cues_in(&state.pool, &today).await
+}
+
+#[tauri::command]
 pub async fn delete_cue(id: String, state: State<'_, DbState>) -> Result<(), String> {
     delete_cue_in(&state.pool, &id).await
 }
@@ -295,6 +354,7 @@ mod tests {
             days: vec![1, 2, 3, 4, 5],
             flex_min: 0,
             ends_day: false,
+            on_date: None,
         }
     }
 
@@ -394,7 +454,7 @@ mod tests {
     async fn update_changes_the_fields_and_keeps_the_same_id() {
         let pool = pool().await;
         let made = create_cue_in(&pool, input()).await.unwrap();
-        let changed = CueInput { label: "  Study  ".into(), time_min: 1000, days: vec![6, 0], flex_min: 15, ends_day: false };
+        let changed = CueInput { label: "  Study  ".into(), time_min: 1000, days: vec![6, 0], flex_min: 15, ends_day: false, on_date: None };
 
         let updated = update_cue_in(&pool, &made.id, changed).await.unwrap();
 
@@ -497,5 +557,124 @@ mod tests {
     fn profile_json_uses_camel_case_and_lowercase_chronotype() {
         let json = serde_json::to_string(&UserProfile::default()).unwrap();
         assert_eq!(json, r#"{"chronotype":"neutral","energyOverrides":{}}"#);
+    }
+
+    // --- cues that belong to one date ---------------------------------------------------------
+
+    const WED: &str = "2026-10-21"; // a Wednesday (3)
+
+    fn one_date(date: &str) -> CueInput {
+        CueInput { on_date: Some(date.into()), ..input() }
+    }
+
+    #[tokio::test]
+    async fn a_cue_for_one_date_keeps_its_date_and_runs_on_that_weekday_only() {
+        let pool = pool().await;
+        // The weekdays the form happened to send are ignored: the date decides.
+        let made = create_cue_in(&pool, CueInput { days: vec![1, 2], ..one_date(WED) }).await.unwrap();
+        assert_eq!(made.on_date.as_deref(), Some(WED));
+        assert_eq!(made.days, vec![3]);
+
+        let listed = list_cues_in(&pool).await.unwrap();
+        assert_eq!(listed[0].on_date.as_deref(), Some(WED));
+        assert_eq!(listed[0].days, vec![3]);
+    }
+
+    #[tokio::test]
+    async fn a_one_date_cue_needs_no_days_picked() {
+        let pool = pool().await;
+        assert!(create_cue_in(&pool, CueInput { days: vec![], ..one_date(WED) }).await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn an_ordinary_cue_has_no_date() {
+        let pool = pool().await;
+        let made = create_cue_in(&pool, input()).await.unwrap();
+        assert_eq!(made.on_date, None);
+        assert_eq!(list_cues_in(&pool).await.unwrap()[0].on_date, None);
+    }
+
+    #[tokio::test]
+    async fn a_date_that_is_not_a_date_is_refused_and_nothing_is_stored() {
+        let pool = pool().await;
+        for bad in ["", "tomorrow", "2026-13-01", "2026-10-32", "21-10-2026"] {
+            assert!(create_cue_in(&pool, one_date(bad)).await.is_err(), "{bad:?}");
+        }
+        assert!(list_cues_in(&pool).await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_cue_can_be_switched_between_every_week_and_one_date() {
+        let pool = pool().await;
+        let made = create_cue_in(&pool, input()).await.unwrap();
+
+        let to_one = update_cue_in(&pool, &made.id, one_date(WED)).await.unwrap();
+        assert_eq!((to_one.on_date.as_deref(), to_one.days.clone()), (Some(WED), vec![3]));
+
+        let back = update_cue_in(&pool, &made.id, CueInput { days: vec![1, 5], ..input() }).await.unwrap();
+        assert_eq!((back.on_date, back.days.clone()), (None, vec![1, 5]));
+        let stored = list_cues_in(&pool).await.unwrap();
+        assert_eq!((stored[0].on_date.clone(), stored[0].days.clone()), (None, vec![1, 5]));
+    }
+
+    #[tokio::test]
+    async fn pruning_removes_only_one_date_cues_from_days_gone_by_and_frees_their_blocks() {
+        let pool = pool().await;
+        let weekly = create_cue_in(&pool, CueInput { label: "Weekly".into(), time_min: 100, ..input() }).await.unwrap();
+        let yesterday = create_cue_in(&pool, CueInput { label: "Yesterday".into(), time_min: 200, ..one_date("2026-10-20") }).await.unwrap();
+        let today = create_cue_in(&pool, CueInput { label: "Today".into(), time_min: 300, ..one_date(WED) }).await.unwrap();
+        let later = create_cue_in(&pool, CueInput { label: "Later".into(), time_min: 400, ..one_date("2026-10-22") }).await.unwrap();
+
+        crate::db::init_container_schema(&pool).await.unwrap();
+        sqlx::query("INSERT INTO focus_blocks (id, is_completed) VALUES ('b1', 0)").execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO containers (id, focus_block_id, order_index, task_title, parent_kind, parent_id, scheduled_on) VALUES ('c1', 'b1', 0, 'x', 'cue', $1, '2026-10-20')")
+            .bind(&yesterday.id)
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        let removed = prune_expired_cues_in(&pool, WED).await.unwrap();
+
+        assert_eq!(removed, 1);
+        let kept: Vec<String> = list_cues_in(&pool).await.unwrap().into_iter().map(|c| c.id).collect();
+        assert_eq!(kept.len(), 3);
+        for cue in [&weekly, &today, &later] {
+            assert!(kept.contains(&cue.id), "{}", cue.label);
+        }
+        let parent: Option<String> = sqlx::query_scalar("SELECT parent_id FROM containers WHERE focus_block_id = 'b1'").fetch_one(&pool).await.unwrap();
+        assert_eq!(parent, None); // not left pointing at a cue that is gone
+    }
+
+    #[tokio::test]
+    async fn pruning_twice_or_with_nothing_to_prune_is_harmless() {
+        let pool = pool().await;
+        create_cue_in(&pool, input()).await.unwrap();
+        assert_eq!(prune_expired_cues_in(&pool, WED).await.unwrap(), 0);
+        assert_eq!(prune_expired_cues_in(&pool, WED).await.unwrap(), 0);
+    }
+
+    #[tokio::test]
+    async fn pruning_with_a_bad_date_is_refused_so_it_can_never_delete_everything() {
+        let pool = pool().await;
+        create_cue_in(&pool, one_date(WED)).await.unwrap();
+        assert!(prune_expired_cues_in(&pool, "").await.is_err());
+        assert!(prune_expired_cues_in(&pool, "zzzz").await.is_err());
+        assert_eq!(list_cues_in(&pool).await.unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn cues_saved_before_dates_existed_read_as_every_week() {
+        let pool = SqlitePoolOptions::new().max_connections(1).connect("sqlite::memory:").await.unwrap();
+        sqlx::query("CREATE TABLE cues (id TEXT PRIMARY KEY NOT NULL, label TEXT NOT NULL, time_min INTEGER NOT NULL, days TEXT NOT NULL, flex_min INTEGER NOT NULL DEFAULT 0, ends_day INTEGER NOT NULL DEFAULT 0)")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO cues (id, label, time_min, days) VALUES ('old', 'Old cue', 600, '[1,2]')").execute(&pool).await.unwrap();
+
+        crate::db::init_cue_schema(&pool).await.unwrap();
+        crate::db::init_cue_schema(&pool).await.unwrap(); // running twice must be harmless
+
+        let cues = list_cues_in(&pool).await.unwrap();
+        assert_eq!((cues[0].label.as_str(), cues[0].on_date.clone(), cues[0].days.clone()), ("Old cue", None, vec![1, 2]));
     }
 }

@@ -100,6 +100,8 @@ async function init() {
     ['urgency picker', initUrgencyPicker],
     ['form layout', () => updateFormLayout(currentBlockType)],
     ['window size', () => appWindow.setSize(compactSize())],
+    // Cues made for a day that is over can never run again, so they go before the list is shown.
+    ['expired cues', () => invoke('prune_expired_cues', { today: todayKey() })],
     ['cues', initCueUi],
     ['today list', initTodayUi],
     // Plans today on launch, so the day's commitments are right even if no block is made.
