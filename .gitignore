@@ -25,3 +25,7 @@ dist-ssr
 
 *.db
 .vibewise/*
+
+# Local tooling
+.claude/
+.vibe-wise/

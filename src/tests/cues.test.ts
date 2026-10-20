@@ -17,6 +17,7 @@ const input = (over: Partial<CueInput> = {}): CueInput => ({
   timeMin: 930, // 3:30 PM
   days: [1, 2, 3, 4, 5],
   flexMin: 0,
+  endsDay: false,
   ...over,
 });
 const cue = (over: Partial<Cue> = {}): Cue => ({ id: 'c1', ...input(), ...over });
@@ -87,6 +88,17 @@ describe('parseCue', () => {
       [],
     );
     expect(r).toEqual({ ok: true, value: input({ days: [1, 3, 5] }) });
+  });
+
+  it('keeps a cue marked as the end of the day', () => {
+    const r = parseCue(input({ label: 'Bedtime', timeMin: 1320, endsDay: true }), []);
+    expect(r).toEqual({ ok: true, value: input({ label: 'Bedtime', timeMin: 1320, endsDay: true }) });
+  });
+
+  it('treats a cue without the end-of-day field as an ordinary cue', () => {
+    const { endsDay: _omitted, ...withoutField } = input();
+    const r = parseCue(withoutField as unknown as CueInput, []);
+    expect(r.ok && r.value.endsDay).toBe(false);
   });
 
   it.each([

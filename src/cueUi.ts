@@ -99,9 +99,10 @@ function renderCueList() {
     name.textContent = cue.label;
 
     const flex = cue.flexMin > 0 ? ` · ± ${cue.flexMin} min` : '';
+    const ends = cue.endsDay ? ' · ends your day' : '';
     const detail = document.createElement('span');
     detail.className = 'text-xs text-slate-400';
-    detail.textContent = `${formatClock(cue.timeMin)} · ${formatDays(cue.days as Weekday[])}${flex}`;
+    detail.textContent = `${formatClock(cue.timeMin)} · ${formatDays(cue.days as Weekday[])}${flex}${ends}`;
 
     text.append(name, detail);
 
@@ -209,6 +210,7 @@ function openCueModal(cue?: Cue) {
   el<HTMLInputElement>('cue-label')!.value = cue?.label ?? '';
   el<HTMLInputElement>('cue-time')!.value = cue ? toClockValue(cue.timeMin) : '';
   setFlexValue(cue?.flexMin ?? 0);
+  el<HTMLInputElement>('cue-ends-day')!.checked = cue?.endsDay ?? false;
   selectedDays.clear();
   (cue ? (cue.days as Weekday[]) : PRESETS.all).forEach((d) => selectedDays.add(d));
   renderDays();
@@ -237,6 +239,7 @@ async function saveCue() {
       timeMin,
       days: [...selectedDays],
       flexMin: Number(el<HTMLSelectElement>('cue-flex')?.value ?? 0),
+      endsDay: el<HTMLInputElement>('cue-ends-day')?.checked ?? false,
     },
     // A cue being edited must not count as clashing with its own old self.
     cues.filter((c) => c.id !== editingId),

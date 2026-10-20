@@ -5,12 +5,14 @@ export type Result<T> = { ok: true; value: T } | { ok: false; error: string };
 
 // A cue is a fixed moment in the user's day ("after school, 3:30 PM") that repeats on chosen
 // weekdays. flexMin is how far the real moment can drift either way; the planner still uses
-// the exact time.
+// the exact time. A cue marked endsDay (like "bedtime") closes the chain of blocks before it
+// and cannot hold blocks itself.
 export interface CueInput {
   label: string;
   timeMin: number; // minutes since local midnight, 0..1439
   days: Weekday[];
   flexMin: number; // +/- minutes
+  endsDay: boolean;
 }
 
 export interface Cue extends CueInput {
@@ -108,7 +110,7 @@ export function parseCue(input: CueInput, existing: Cue[]): Result<CueInput> {
     return { ok: false, error: `Flex can be at most ${MAX_FLEX} minutes.` };
   }
 
-  const value: CueInput = { label, timeMin: input.timeMin, days: days as Weekday[], flexMin };
+  const value: CueInput = { label, timeMin: input.timeMin, days: days as Weekday[], flexMin, endsDay: input.endsDay === true };
   const clash = existing.find((c) => cuesOverlap(value, c));
   if (clash) return { ok: false, error: `Overlaps with "${clash.label}".` };
 

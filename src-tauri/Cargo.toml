@@ -1,6 +1,6 @@
 [package]
 name = "blinkers"
-version = "0.1.0"
+version = "0.2.0"
 description = "A Tauri App"
 authors = ["you"]
 edition = "2021"
@@ -28,4 +28,5 @@ sqlx = { version = "0.8", features = ["runtime-tokio", "sqlite"] }
 fs = "0.0.5"
 uuid = { version = "1.11", features = ["v4"] }
 tauri-plugin-store = "2"
+reqwest = "0.13"
 

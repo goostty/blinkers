@@ -33,9 +33,23 @@ Pick the `.dmg` that matches your Mac: `aarch64` for Apple Silicon (M1 and newer
 - **Debian / Ubuntu:** `sudo apt install ./blinkers_*.deb`
 - **Fedora:** `sudo dnf install ./blinkers-*.rpm`
 
+## Phone reminders
+
+Blinkers sends a reminder to your phone when a block is due, using [ntfy](https://ntfy.sh), a free notification service.
+
+1. Install the ntfy app on your phone.
+2. In Blinkers, open **Settings** and copy your topic. It looks like `blinkers_` followed by 32 random characters.
+3. In the ntfy app, subscribe to that topic.
+
+If you ignore a reminder, you get another every 5 minutes, up to 6 in total, each more urgent than the last. Pressing **Start** in Blinkers stops them.
+
+**What leaves your computer:** only the reminders. Each one contains the block's title, its first step, its start time and the name of its cue, and goes to ntfy.sh over HTTPS. ntfy topics have no password: anyone who knows the topic name can read your reminders and send you fake ones. The name is long and random so it cannot be guessed, but treat it like a password: don't share it or post it in screenshots. If it leaks, use **Settings → Use a different topic**.
+
+Reminders are sent only while Blinkers is running. If the app is closed or the computer is asleep, the reminder arrives late or not at all.
+
 ## Your data
 
-Everything is stored locally on your computer. Nothing is uploaded. It lives in a folder named after the app identifier, `com.goostty.blinkers`:
+Your blocks, cues and settings are stored locally on your computer. The only thing sent anywhere is the reminders described above. The data lives in a folder named after the app identifier, `com.goostty.blinkers`:
 
 | System | Location |
 | --- | --- |
@@ -43,12 +57,12 @@ Everything is stored locally on your computer. Nothing is uploaded. It lives in 
 | macOS | `~/Library/Application Support/com.goostty.blinkers/` |
 | Linux | `~/.local/share/com.goostty.blinkers/` |
 
-To back up your data, copy that folder. Uninstalling the app does not delete it.
+To back up your data, copy that folder. Uninstalling the app does not delete it. Your reminder topic is stored there too, so restoring a backup keeps your phone subscription working.
 
 ## Releasing (for maintainers)
 
 1. Bump the version in `package.json`, `src-tauri/Cargo.toml` and `src-tauri/tauri.conf.json` (all three must match).
-2. Commit, then tag and push: `git tag v0.1.1 && git push origin v0.1.1`.
+2. Commit, then tag and push, using the same version with a `v` in front: `git tag v0.2.1 && git push origin v0.2.1`. A tag that already exists on GitHub cannot be reused.
 3. GitHub Actions runs the tests, builds Windows, macOS (Apple Silicon and Intel) and Linux installers, and attaches them to a **draft** release.
 4. Review the draft on GitHub, then publish it.
 

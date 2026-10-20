@@ -1,7 +1,11 @@
 use tauri::Manager;
+mod commitments;
 mod containers;
 mod cues;
 mod db;
+mod notifier;
+mod ntfy;
+mod reminder;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -16,20 +20,34 @@ pub fn run() {
                     .expect("Failed to initialize DB!");
                 app_handle.manage(db_state);
             });
+            app.manage(notifier::NtfyClient(ntfy::make_client(ntfy::SEND_TIMEOUT)));
             Ok(())
         })
         .plugin(tauri_plugin_opener::init())
         .invoke_handler(tauri::generate_handler![
             containers::create_container,
+            containers::attach_block,
+            containers::dismiss_block,
+            containers::reschedule_block,
+            containers::get_block_details,
+            containers::update_block,
+            containers::list_day_blocks,
             containers::fetch_container,
-            containers::list_pending_blocks,
+            commitments::sync_commitments,
+            commitments::start_block,
+            commitments::finish_block,
+            commitments::lapse_block,
+            commitments::list_commitments,
             db::get_next_order_index,
             cues::create_cue,
             cues::update_cue,
             cues::list_cues,
             cues::delete_cue,
             cues::get_profile,
-            cues::set_profile
+            cues::set_profile,
+            ntfy::get_ntfy_topic,
+            ntfy::set_ntfy_topic,
+            notifier::tick_reminders
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

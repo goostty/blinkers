@@ -4,8 +4,15 @@ import { openUrl } from '@tauri-apps/plugin-opener';
 import { load } from '@tauri-apps/plugin-store';
 import { addUnique, filterApps, parseWebsite, type AppEntry } from './appTargets';
 import { APP_CATALOG } from './appCatalog';
+import { initBlockActionsUi } from './blockActionsUi';
 import { initCueUi } from './cueUi';
-import { showSuggestedSlot, todayKey } from './scheduleUi';
+import { initNotifySettingsUi } from './notifySettingsUi';
+import { initReminderTick } from './reminderTick';
+import { initTodayUi } from './todayUi';
+import { refreshDay, showSuggestedSlot, todayKey } from './scheduleUi';
+import { resolveAttach, resolveDuration, type ParentChoice } from './attach';
+import type { Urgency } from './scheduler';
+import { needsUrgency, resolveUrgency } from './urgency';
 
 export interface TaskItem {
   title: string;
@@ -13,7 +20,7 @@ export interface TaskItem {
   definitionOfDone?: string;
 }
 
-type Drawer = 'add-task' | 'add-cue' | null;
+type Drawer = 'today' | 'add-task' | 'add-cue' | 'settings' | null;
 type BlockType = 'deep' | 'routine' | 'reset' | 'recharge';
 
 // No top-level await: it delays this module past DOMContentLoaded, so the
@@ -22,6 +29,7 @@ const storePromise = load('apps.json');
 const appWindow = getCurrentWindow();
 let activeDrawer: Drawer = null;
 let currentBlockType: BlockType = 'deep';
+let currentUrgency: Urgency | null = null;
 let selectedApps: AppEntry[] = [];
 const BLOCK_LABELS: Record<BlockType, string> = {
   deep: 'Deep work',
@@ -31,30 +39,84 @@ const BLOCK_LABELS: Record<BlockType, string> = {
 };
 
 // DOM Elements
-const pauseBtn = document.getElementById('btn-pause');
 const anchorBtn = document.getElementById('create-anchor');
 const toggleDrawerBtn = document.getElementById('btn-toggle-drawer');
 const createForm = document.getElementById('form-create-container') as HTMLFormElement | null;
-const stateBadge = document.getElementById('current-state-badge');
 
 const deepWorkBlock = document.getElementById('deep-work');
 const routineBlock = document.getElementById('routine-block');
 const resetBlock = document.getElementById('reset-block');
 const rechargeBlock = document.getElementById('recharge-block');
 
-let isCurrentlyPaused = false;
+const COMPACT_HEIGHT = 68;
+const EXPANDED_HEIGHT = 720;
+// The strip with the Start / Finish / Lapse buttons sits under the header while a block is up.
+const STRIP_HEIGHT = 40;
+let stripVisible = false;
 
-const COMPACT_SIZE = new LogicalSize(540, 68);
-const EXPANDED_SIZE = new LogicalSize(540, 720);
+const windowSize = (height: number) => new LogicalSize(540, height + (stripVisible ? STRIP_HEIGHT : 0));
+const compactSize = () => windowSize(COMPACT_HEIGHT);
+const expandedSize = () => windowSize(EXPANDED_HEIGHT);
 
-const playSVG = `<svg class="w-3.5 h-3.5 text-amber-400" fill="currentColor" viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>`;
-const pauseSVG = `<svg class="w-3.5 h-3.5 text-slate-400 hover:text-slate-100" fill="currentColor" viewBox="0 0 24 24"><path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"/></svg>`;
+// A block sent back for rescheduling waits in the Today tab's "needs a place" list; open it.
+function showPlaceNeeded() {
+  if (activeDrawer !== 'today') void toggleDrawer('today');
+}
 
+// The tab bar only shows while a pane is open, and the open pane's tab is the lit one.
+function syncTabs() {
+  const bar = document.getElementById('tab-bar');
+  if (bar) bar.hidden = activeDrawer === null;
+  document.querySelectorAll<HTMLElement>('[data-tab]').forEach((tab) => {
+    const active = tab.dataset.tab === activeDrawer;
+    tab.classList.toggle('bg-indigo-600', active);
+    tab.classList.toggle('text-slate-100', active);
+    tab.classList.toggle('text-slate-400', !active);
+    tab.classList.toggle('hover:text-slate-200', !active);
+    tab.setAttribute('aria-pressed', String(active));
+  });
+}
+
+// The window grows to fit the strip when it appears and shrinks back when it goes.
+function setStripVisible(visible: boolean) {
+  stripVisible = visible;
+  void appWindow.setSize(activeDrawer === null ? compactSize() : expandedSize());
+}
+
+// Deep work almost always runs over, so the form asks for a buffer (nothing is added for you).
+// Rest only exists when you set it: an empty cue is free time, not rest.
+const LENGTH_HINT: Record<BlockType, string> = {
+  deep: 'Overestimate: deep work almost always takes longer than planned, so add a buffer.',
+  routine: 'How long this usually takes.',
+  reset: 'How long the reset lasts.',
+  recharge: 'How long you are resting. Rest only counts when you set it here; an empty cue is just free time.',
+};
+
+// Each step runs on its own, so one that fails cannot switch off the rest of the app (a form bug
+// once left the cue buttons dead because they were set up after it).
 async function init() {
-  initBlockSelector();
-  updateFormLayout(currentBlockType);
-  await appWindow.setSize(COMPACT_SIZE);
-  await initCueUi();
+  const steps: Array<[string, () => void | Promise<unknown>]> = [
+    ['block selector', initBlockSelector],
+    ['urgency picker', initUrgencyPicker],
+    ['form layout', () => updateFormLayout(currentBlockType)],
+    ['window size', () => appWindow.setSize(compactSize())],
+    ['cues', initCueUi],
+    ['today list', initTodayUi],
+    // Plans today on launch, so the day's commitments are right even if no block is made.
+    ['day plan', refreshDay],
+    // After the plan is saved, so it reads the commitments that plan just wrote.
+    ['block actions', () => initBlockActionsUi(setStripVisible, showPlaceNeeded)],
+    ['notification settings', initNotifySettingsUi],
+    // Last, so the first tick sees the plan that was just saved.
+    ['reminders', initReminderTick],
+  ];
+  for (const [name, step] of steps) {
+    try {
+      await step();
+    } catch (err) {
+      console.error(`Could not set up ${name}:`, err);
+    }
+  }
 }
 
 if (document.readyState === 'loading') {
@@ -249,7 +311,14 @@ async function openSelectedApps(entries: AppEntry[]) {
   }
 }
 
-async function handleSubmit(title: string, actionTrigger: string, definitionOfDone: string) {
+async function handleSubmit(
+  title: string,
+  actionTrigger: string,
+  definitionOfDone: string,
+  urgency: Urgency | null,
+  durationMin: number,
+  parent: ParentChoice | null,
+) {
   try {
     const orderIndex = await invoke<number>("get_next_order_index");
 
@@ -263,6 +332,11 @@ async function handleSubmit(title: string, actionTrigger: string, definitionOfDo
       task: primaryTask,
       orderIndex: orderIndex,
       blockType: currentBlockType,
+      urgency,
+      // Saved with the block so they can be opened when it starts; rest blocks open nothing.
+      apps: needsUrgency(currentBlockType) ? selectedApps : [],
+      durationMin,
+      parent,
       createdOn: todayKey(),
     });
 
@@ -277,51 +351,31 @@ async function handleSubmit(title: string, actionTrigger: string, definitionOfDo
   }
 }
 
-function handlePlaybackToggle() {
-  isCurrentlyPaused = !isCurrentlyPaused;
-
-  if (isCurrentlyPaused) {
-    if (pauseBtn) {
-      pauseBtn.innerHTML = playSVG;
-      pauseBtn.title = "Resume Task";
-    }
-    if (stateBadge) {
-      stateBadge.innerText = 'PAUSED';
-      stateBadge.className = 'text-[9px] font-semibold bg-amber-500/10 text-amber-400 border border-amber-500/20 px-1.5 py-0.5 rounded-full uppercase';
-    }
-  } else {
-    if (pauseBtn) {
-      pauseBtn.innerHTML = pauseSVG;
-      pauseBtn.title = "Pause Task";
-    }
-    if (stateBadge) {
-      stateBadge.innerText = 'ACTIVE';
-      stateBadge.className = 'text-[9px] font-semibold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 px-1.5 py-0.5 rounded-full uppercase';
-    }
-  }
-}
-
 async function toggleDrawer(target: Drawer) {
   const isClosing = activeDrawer === target;
 
   if (isClosing) {
     activeDrawer = null;
+    syncTabs();
     closeAllUIDrawers();
 
     setTimeout(async () => {
       if (activeDrawer === null) {
-        await appWindow.setSize(COMPACT_SIZE);
+        await appWindow.setSize(compactSize());
       }
     }, 300);
   } else {
     const wasFullyClosed = activeDrawer === null;
     activeDrawer = target;
+    syncTabs();
 
     if (wasFullyClosed) {
-      await appWindow.setSize(EXPANDED_SIZE);
+      await appWindow.setSize(expandedSize());
     }
 
     openSpecificDrawerUI(target);
+    // Cues may have changed since the drawer was last open, so the "follows" choices are rebuilt.
+    if (target === 'add-task' || target === 'today') void refreshDay();
   }
 }
 
@@ -330,6 +384,7 @@ function closeAllUIDrawers() {
   drawers.forEach(d => {
     const drawerEl = d as HTMLElement;
     drawerEl.style.maxHeight = '0px';
+    drawerEl.style.overflowY = '';
     drawerEl.classList.remove('border-t', 'border-slate-800/60');
     drawerEl.classList.add('border-t-border-slate-800/0');
   });
@@ -347,7 +402,10 @@ function openSpecificDrawerUI(target: Drawer) {
   const iconElement = document.getElementById(`${target}-icon`);
 
   if (drawerElement) {
-    drawerElement.style.maxHeight = '640px';
+    // As tall as the window allows below the header, strip and tabs; longer panes scroll.
+    drawerElement.style.maxHeight = 'calc(100vh - 170px)';
+    // The task form is taller than the drawer, so let it scroll instead of cutting it off.
+    drawerElement.style.overflowY = 'auto';
     drawerElement.classList.remove('border-t-border-slate-800/0');
     drawerElement.classList.add('border-t', 'border-slate-800/60');
   }
@@ -360,15 +418,18 @@ function openSpecificDrawerUI(target: Drawer) {
 function updateFormLayout(type: BlockType) {
   const tasksSection = document.getElementById('tasks-section');
   const gridSection = document.getElementById('grid-section');
-  const durationSection = document.getElementById('duration-section');
+  const urgencySection = document.getElementById('urgency-section');
 
-  if (!tasksSection || !gridSection || !durationSection) return;
+  if (!tasksSection || !gridSection || !urgencySection) return;
 
   // Use the `hidden` property, not the Tailwind class: `grid` and `hidden`
   // are both display utilities and the grid one wins, so the class never hid anything.
   tasksSection.hidden = false;
   gridSection.hidden = false;
-  durationSection.hidden = true;
+  urgencySection.hidden = !needsUrgency(type);
+  showUrgencyError('');
+  showFieldError('duration-error', '');
+  showFieldError('attach-error', '');
 
   switch (type) {
     case 'deep':
@@ -381,9 +442,61 @@ function updateFormLayout(type: BlockType) {
     case 'recharge':
       tasksSection.hidden = true;
       gridSection.hidden = true;
-      durationSection.hidden = false;
       break;
   }
+
+  // A hidden field that is still `required` makes the browser refuse to submit the whole form
+  // (recharge has no title), so the title is only required while it can be seen.
+  const titleInput = document.getElementById('task-title') as HTMLInputElement | null;
+  if (titleInput) titleInput.required = !tasksSection.hidden;
+
+  const hint = document.getElementById('duration-hint');
+  if (hint) hint.textContent = LENGTH_HINT[type];
+  updateAttachVisibility();
+}
+
+// A block advised to drop (Q4) is not part of the day, so there is nothing for it to follow.
+function updateAttachVisibility() {
+  const attachSection = document.getElementById('attach-section');
+  if (attachSection) attachSection.hidden = needsUrgency(currentBlockType) && currentUrgency === 'neither';
+}
+
+function showFieldError(id: string, message: string) {
+  const node = document.getElementById(id);
+  if (!node) return;
+  node.textContent = message;
+  node.hidden = message === '';
+}
+
+function showUrgencyError(message: string) {
+  const el = document.getElementById('urgency-error');
+  if (!el) return;
+  el.textContent = message;
+  el.hidden = message === '';
+}
+
+function renderUrgency() {
+  document.querySelectorAll<HTMLElement>('[data-urgency]').forEach((btn) => {
+    const active = btn.dataset.urgency === currentUrgency;
+    btn.classList.toggle('bg-indigo-600', active);
+    btn.classList.toggle('text-slate-100', active);
+    btn.classList.toggle('text-slate-400', !active);
+    btn.classList.toggle('hover:text-slate-200', !active);
+    btn.setAttribute('aria-pressed', String(active));
+  });
+}
+
+// There is deliberately no default: picking is the point, so a task is never ranked by accident.
+function initUrgencyPicker() {
+  document.querySelectorAll<HTMLElement>('[data-urgency]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      currentUrgency = btn.dataset.urgency as Urgency;
+      renderUrgency();
+      showUrgencyError('');
+      updateAttachVisibility();
+    });
+  });
+  renderUrgency();
 }
 
 function initBlockSelector() {
@@ -443,9 +556,18 @@ window.addEventListener('keydown', (e) => {
   if (e.key === 'Escape') closePicker();
 });
 
-if (pauseBtn) pauseBtn.addEventListener('click', handlePlaybackToggle);
 if (toggleDrawerBtn) toggleDrawerBtn.addEventListener('click', () => toggleDrawer('add-task'));
 if (anchorBtn) anchorBtn.addEventListener('click', () => toggleDrawer('add-cue'));
+document.getElementById('settings')?.addEventListener('click', () => toggleDrawer('settings'));
+document.getElementById('btn-today')?.addEventListener('click', () => toggleDrawer('today'));
+document.getElementById('btn-place')?.addEventListener('click', showPlaceNeeded);
+// A tab opens its pane; clicking the lit one does nothing (the header icons are what close it).
+document.querySelectorAll<HTMLElement>('[data-tab]').forEach((tab) => {
+  tab.addEventListener('click', () => {
+    const target = tab.dataset.tab as Drawer;
+    if (target !== activeDrawer) void toggleDrawer(target);
+  });
+});
 
 if (createForm) {
   createForm.addEventListener('submit', async (e) => {
@@ -459,11 +581,34 @@ if (createForm) {
     const actionTrigger = actionInput?.value.trim() || '';
     const definitionOfDone = dodInput?.value.trim() || '';
 
+    // An unclassified work block stops here with the form left as typed, so nothing is lost.
+    const urgency = resolveUrgency(currentBlockType, currentUrgency);
+    if (!urgency.ok) {
+      showUrgencyError(urgency.error);
+      return;
+    }
+
+    showFieldError('duration-error', '');
+    showFieldError('attach-error', '');
+    const duration = resolveDuration((document.getElementById('block-duration') as HTMLInputElement | null)?.value ?? '');
+    if (!duration.ok) {
+      showFieldError('duration-error', duration.error);
+      return;
+    }
+    const parent = resolveAttach(urgency.value, (document.getElementById('block-attach') as HTMLSelectElement | null)?.value ?? '');
+    if (!parent.ok) {
+      showFieldError('attach-error', parent.error);
+      return;
+    }
+
     if (title || currentBlockType === 'recharge') {
-      await handleSubmit(title, actionTrigger, definitionOfDone);
+      await handleSubmit(title, actionTrigger, definitionOfDone, urgency.value, duration.value, parent.value);
     }
 
     createForm.reset();
+    currentUrgency = null;
+    renderUrgency();
+    updateAttachVisibility();
     selectedApps = [];
     renderSelected();
     toggleDrawer(activeDrawer);

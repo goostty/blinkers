@@ -16,6 +16,9 @@ pub struct CueInput {
     pub time_min: i32,
     pub days: Vec<u8>,
     pub flex_min: i32,
+    // A cue like "bedtime" closes the chain before it and cannot hold blocks itself.
+    #[serde(default)]
+    pub ends_day: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -26,6 +29,7 @@ pub struct Cue {
     pub time_min: i32,
     pub days: Vec<u8>,
     pub flex_min: i32,
+    pub ends_day: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
@@ -107,6 +111,7 @@ struct CueRow {
     time_min: i32,
     days: String,
     flex_min: i32,
+    ends_day: bool,
 }
 
 impl CueRow {
@@ -118,6 +123,7 @@ impl CueRow {
             time_min: self.time_min,
             days,
             flex_min: self.flex_min,
+            ends_day: self.ends_day,
         })
     }
 }
@@ -130,17 +136,19 @@ pub async fn create_cue_in(pool: &SqlitePool, input: CueInput) -> Result<Cue, St
         time_min: valid.time_min,
         days: valid.days,
         flex_min: valid.flex_min,
+        ends_day: valid.ends_day,
     };
     let days = serde_json::to_string(&cue.days).map_err(|e| e.to_string())?;
 
     sqlx::query(
-        "INSERT INTO cues (id, label, time_min, days, flex_min) VALUES ($1, $2, $3, $4, $5)",
+        "INSERT INTO cues (id, label, time_min, days, flex_min, ends_day) VALUES ($1, $2, $3, $4, $5, $6)",
     )
     .bind(&cue.id)
     .bind(&cue.label)
     .bind(cue.time_min)
     .bind(days)
     .bind(cue.flex_min)
+    .bind(cue.ends_day)
     .execute(pool)
     .await
     .map_err(|e| e.to_string())?;
@@ -155,12 +163,13 @@ pub async fn update_cue_in(pool: &SqlitePool, id: &str, input: CueInput) -> Resu
     let days = serde_json::to_string(&valid.days).map_err(|e| e.to_string())?;
 
     let result = sqlx::query(
-        "UPDATE cues SET label = $1, time_min = $2, days = $3, flex_min = $4 WHERE id = $5",
+        "UPDATE cues SET label = $1, time_min = $2, days = $3, flex_min = $4, ends_day = $5 WHERE id = $6",
     )
     .bind(&valid.label)
     .bind(valid.time_min)
     .bind(days)
     .bind(valid.flex_min)
+    .bind(valid.ends_day)
     .bind(id)
     .execute(pool)
     .await
@@ -176,12 +185,13 @@ pub async fn update_cue_in(pool: &SqlitePool, id: &str, input: CueInput) -> Resu
         time_min: valid.time_min,
         days: valid.days,
         flex_min: valid.flex_min,
+        ends_day: valid.ends_day,
     })
 }
 
 pub async fn list_cues_in(pool: &SqlitePool) -> Result<Vec<Cue>, String> {
     let rows = sqlx::query_as::<_, CueRow>(
-        "SELECT id, label, time_min, days, flex_min FROM cues ORDER BY time_min, label",
+        "SELECT id, label, time_min, days, flex_min, ends_day FROM cues ORDER BY time_min, label",
     )
     .fetch_all(pool)
     .await
@@ -190,17 +200,29 @@ pub async fn list_cues_in(pool: &SqlitePool) -> Result<Vec<Cue>, String> {
     rows.into_iter().map(CueRow::into_cue).collect()
 }
 
+// A block that followed the deleted cue is left without a place instead of pointing at a cue that
+// is gone: it (and the blocks behind it) can then be attached somewhere else. Both changes happen
+// together or not at all.
 pub async fn delete_cue_in(pool: &SqlitePool, id: &str) -> Result<(), String> {
+    let mut tx = pool.begin().await.map_err(|e| e.to_string())?;
+
     let result = sqlx::query("DELETE FROM cues WHERE id = $1")
         .bind(id)
-        .execute(pool)
+        .execute(&mut *tx)
         .await
         .map_err(|e| e.to_string())?;
 
     if result.rows_affected() == 0 {
         return Err("Cue not found.".into());
     }
-    Ok(())
+
+    sqlx::query("UPDATE containers SET parent_kind = NULL, parent_id = NULL WHERE parent_kind = 'cue' AND parent_id = $1")
+        .bind(id)
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| e.to_string())?;
+
+    tx.commit().await.map_err(|e| e.to_string())
 }
 
 // A user who never set a profile is treated as a neutral chronotype with no overrides.
@@ -272,6 +294,7 @@ mod tests {
             time_min: 930,
             days: vec![1, 2, 3, 4, 5],
             flex_min: 0,
+            ends_day: false,
         }
     }
 
@@ -282,6 +305,8 @@ mod tests {
             .await
             .unwrap();
         crate::db::init_cue_schema(&pool).await.unwrap();
+        // Deleting a cue also detaches the blocks that followed it.
+        crate::db::init_container_schema(&pool).await.unwrap();
         pool
     }
 
@@ -333,6 +358,32 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_cue_can_be_marked_as_the_end_of_the_day_and_it_is_stored() {
+        let pool = pool().await;
+        let bed = create_cue_in(&pool, CueInput { label: "Bedtime".into(), time_min: 1320, ends_day: true, ..input() }).await.unwrap();
+        assert!(bed.ends_day);
+        assert!(list_cues_in(&pool).await.unwrap()[0].ends_day);
+    }
+
+    #[tokio::test]
+    async fn updating_a_cue_can_turn_the_end_of_day_mark_on_and_off() {
+        let pool = pool().await;
+        let made = create_cue_in(&pool, input()).await.unwrap();
+        assert!(!made.ends_day);
+        let on = update_cue_in(&pool, &made.id, CueInput { ends_day: true, ..input() }).await.unwrap();
+        assert!(on.ends_day && list_cues_in(&pool).await.unwrap()[0].ends_day);
+        let off = update_cue_in(&pool, &made.id, input()).await.unwrap();
+        assert!(!off.ends_day && !list_cues_in(&pool).await.unwrap()[0].ends_day);
+    }
+
+    #[test]
+    fn a_cue_sent_without_the_end_of_day_field_is_an_ordinary_cue() {
+        let json = r#"{"label":"Study","timeMin":600,"days":[1],"flexMin":0}"#;
+        let parsed: CueInput = serde_json::from_str(json).unwrap();
+        assert!(!parsed.ends_day);
+    }
+
+    #[tokio::test]
     async fn create_rejects_invalid_input_and_stores_nothing() {
         let pool = pool().await;
         assert!(create_cue_in(&pool, CueInput { days: vec![], ..input() }).await.is_err());
@@ -343,7 +394,7 @@ mod tests {
     async fn update_changes_the_fields_and_keeps_the_same_id() {
         let pool = pool().await;
         let made = create_cue_in(&pool, input()).await.unwrap();
-        let changed = CueInput { label: "  Study  ".into(), time_min: 1000, days: vec![6, 0], flex_min: 15 };
+        let changed = CueInput { label: "  Study  ".into(), time_min: 1000, days: vec![6, 0], flex_min: 15, ends_day: false };
 
         let updated = update_cue_in(&pool, &made.id, changed).await.unwrap();
 
@@ -386,6 +437,28 @@ mod tests {
         delete_cue_in(&pool, &made.id).await.unwrap();
         assert!(list_cues_in(&pool).await.unwrap().is_empty());
         assert!(delete_cue_in(&pool, &made.id).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn deleting_a_cue_leaves_the_block_that_followed_it_waiting_for_a_new_place() {
+        let pool = pool().await;
+        let made = create_cue_in(&pool, input()).await.unwrap();
+        let kept = create_cue_in(&pool, CueInput { label: "Evening".into(), time_min: 1140, ..input() }).await.unwrap();
+        for (n, cue) in [("1", &made.id), ("2", &kept.id)] {
+            sqlx::query("INSERT INTO focus_blocks (id, is_completed) VALUES ($1, 0)").bind(format!("b{n}")).execute(&pool).await.unwrap();
+            sqlx::query("INSERT INTO containers (id, focus_block_id, order_index, task_title, parent_kind, parent_id, scheduled_on) VALUES ($1, $2, 0, 't', 'cue', $3, '2026-10-12')")
+                .bind(format!("c{n}"))
+                .bind(format!("b{n}"))
+                .bind(cue)
+                .execute(&pool)
+                .await
+                .unwrap();
+        }
+
+        delete_cue_in(&pool, &made.id).await.unwrap();
+
+        let parents: Vec<(String, Option<String>)> = sqlx::query_as("SELECT focus_block_id, parent_id FROM containers ORDER BY focus_block_id").fetch_all(&pool).await.unwrap();
+        assert_eq!(parents, vec![("b1".to_string(), None), ("b2".to_string(), Some(kept.id.clone()))]);
     }
 
     #[tokio::test]

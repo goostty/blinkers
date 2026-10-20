@@ -5,10 +5,17 @@
 	<meta charset="UTF-8" />
 	<link rel="stylesheet" href="/src/styles.css" />
 	<meta name="viewport" content="width=device-width, initial-scale=1.0" />
-	<title>Tauri App</title>
+	<title>Blinkers</title>
 	<script type="module" src="/src/main.ts" defer></script>
 	<style>
 		/* Crucial window resets for a seamless desktop widget */
+		/* Scrolling panes use the dark scrollbar instead of a white one. */
+		.drawer-content {
+			color-scheme: dark;
+			scrollbar-width: thin;
+			scrollbar-color: #334155 transparent;
+		}
+
 		html,
 		body {
 			overflow: hidden;
@@ -26,40 +33,24 @@
 		<div data-tauri-drag-region
 			class="flex items-center justify-between px-4 py-2.5 cursor-grab active:cursor-grabbing">
 
-			<div data-tauri-drag-region class="flex items-center space-x-2 min-w-0">
-				<span id="task-state"
-					class="text-[9px] font-bold tracking-widest text-indigo-400 bg-indigo-500/10 px-1.5 py-0.5 rounded border border-indigo-500/20 uppercase shrink-0">Anchor</span>
-				<span id="current-task-title" class="text-xs font-medium truncate text-slate-200">Loading task...</span>
+			<div data-tauri-drag-region class="flex items-center min-w-0 flex-1">
+				<span id="current-task-title" data-tauri-drag-region
+					class="text-sm font-semibold tracking-wide truncate text-slate-200">Blinkers</span>
 			</div>
 
-			<div data-tauri-drag-region class="flex items-center space-x-2 mx-2 shrink-0">
-				<span id="timer-countdown"
-					class="text-sm font-mono font-bold text-emerald-400 drop-shadow-[0_0_6px_rgba(52,211,153,0.2)]">--:--</span>
-				<span id="current-state-badge"
-					class="text-[9px] font-semibold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 px-1.5 py-0.5 rounded-full uppercase">Idle</span>
-			</div>
-
-			<div class="flex items-center space-x-1 shrink-0 border-l border-slate-700/60 pl-2">
-				<button id="btn-pause"
+			<div class="flex items-center space-x-1 shrink-0 pl-2">
+				<button id="btn-today"
 					class="cursor-pointer p-1 hover:bg-slate-800 rounded text-slate-400 hover:text-slate-100 transition-colors"
-					title="Pause/Resume">
-					<svg class="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 24 24">
-						<path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z" />
+					title="Today">
+					<svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+						stroke-linecap="round" stroke-linejoin="round">
+						<path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01" />
 					</svg>
 				</button>
 
-				<button id="drop-btn" 
-					class="cursor-pointer p-1 hover:bg-red-600 rounded text-slate-400 hover:text-slate-100 transition-colors"
-					title="Drop from queue">
-					<svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none"
-						stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-						<path d="M3 6h18" />
-						<path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6" />
-						<path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2" />
-						<line x1="10" y1="11" x2="14" y2="15" />
-						<line x1="14" y1="11" x2="10" y2="15" />
-					</svg>
-				</button>
+				<button id="btn-place" hidden
+					class="cursor-pointer px-1.5 py-0.5 text-[10px] font-bold text-amber-400 bg-amber-500/10 border border-amber-500/20 hover:bg-amber-500/20 rounded-full transition-colors"
+					title="Blocks that need a place today"></button>
 
 				<button id="btn-toggle-drawer"
 					class="cursor-pointer p-1 hover:bg-slate-800 rounded text-indigo-400 hover:text-indigo-300 transition-colors select-none"
@@ -95,6 +86,16 @@
 				</button>
 			</div>
 		</div>
+
+		<div id="focus-strip" hidden
+			class="flex flex-wrap items-center gap-3 px-4 py-1.5 border-t border-slate-800/60"></div>
+
+		<nav id="tab-bar" hidden class="flex gap-1 px-3 py-2 border-t border-slate-800/60" aria-label="Sections">
+			<button type="button" data-tab="today" class="cursor-pointer flex-1 py-2 text-sm font-medium rounded-lg text-slate-400 hover:text-slate-200 transition-colors">Today</button>
+			<button type="button" data-tab="add-task" class="cursor-pointer flex-1 py-2 text-sm font-medium rounded-lg text-slate-400 hover:text-slate-200 transition-colors">Add</button>
+			<button type="button" data-tab="add-cue" class="cursor-pointer flex-1 py-2 text-sm font-medium rounded-lg text-slate-400 hover:text-slate-200 transition-colors">Cues</button>
+			<button type="button" data-tab="settings" class="cursor-pointer flex-1 py-2 text-sm font-medium rounded-lg text-slate-400 hover:text-slate-200 transition-colors">Settings</button>
+		</nav>
 
 		<div id="add-task-drawer"
 			class="drawer-content max-h-0 overflow-hidden transition-all duration-300 ease-in-out border-t border-slate-800/0">
@@ -138,6 +139,42 @@
 						class="w-full bg-slate-900 border border-slate-700 rounded-lg px-3.5 py-3 text-sm text-slate-100 focus:outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 placeholder:text-slate-500 transition-colors" />
 				</div>
 
+				<div id="urgency-section" class="flex flex-col gap-2">
+					<span class="block text-xs font-semibold uppercase tracking-wider text-slate-400">How urgent is it?</span>
+					<div id="urgency-options" class="grid grid-cols-4 gap-1.5 p-1 bg-slate-950 border border-slate-800 rounded-xl">
+						<button type="button" data-urgency="urgent-important" title="Urgent and important"
+							class="py-2.5 text-sm font-medium rounded-lg text-slate-400 hover:text-slate-200 transition-colors">🔥 Do now</button>
+						<button type="button" data-urgency="important" title="Important, not urgent"
+							class="py-2.5 text-sm font-medium rounded-lg text-slate-400 hover:text-slate-200 transition-colors">🌱 Schedule</button>
+						<button type="button" data-urgency="urgent" title="Urgent, not important"
+							class="py-2.5 text-sm font-medium rounded-lg text-slate-400 hover:text-slate-200 transition-colors">⚡ Quick</button>
+						<button type="button" data-urgency="neither" title="Neither urgent nor important"
+							class="py-2.5 text-sm font-medium rounded-lg text-slate-400 hover:text-slate-200 transition-colors">🗑️ Drop?</button>
+					</div>
+					<p id="urgency-error" hidden class="text-xs text-rose-400"></p>
+				</div>
+
+				<div id="length-section" class="flex flex-col gap-2">
+					<label for="block-duration" class="block text-xs font-semibold uppercase tracking-wider text-slate-400">Length</label>
+					<div class="flex items-center gap-2 bg-slate-900 border border-slate-700 rounded-lg px-3.5 py-3 focus-within:border-indigo-500 focus-within:ring-2 focus-within:ring-indigo-500/20 transition-colors">
+						<input type="text" inputmode="numeric" pattern="[0-9]*" maxlength="4" autocomplete="off" id="block-duration" value="30"
+							class="w-full bg-transparent text-sm text-slate-100 font-mono focus:outline-none" />
+						<span class="text-xs text-slate-500 font-semibold uppercase">Min</span>
+					</div>
+					<p id="duration-hint" class="text-xs text-slate-500"></p>
+					<p id="duration-error" hidden class="text-xs text-rose-400"></p>
+				</div>
+
+				<div id="attach-section" class="flex flex-col gap-2">
+					<label for="block-attach" class="block text-xs font-semibold uppercase tracking-wider text-slate-400">Follows</label>
+					<select id="block-attach"
+						class="w-full bg-slate-900 border border-slate-700 rounded-lg px-3.5 py-3 text-sm text-slate-100 focus:outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 transition-colors [color-scheme:dark]">
+						<option value="">Pick what it follows…</option>
+					</select>
+					<p class="text-xs text-slate-500">A cue, or another block. Blocks run one after another until the next cue.</p>
+					<p id="attach-error" hidden class="text-xs text-rose-400"></p>
+				</div>
+
 				<div id="grid-section" class="grid grid-cols-2 gap-4">
 					<div id="setup-section" class="flex flex-col gap-2">
 						<label for="action-trigger" class="block text-xs font-semibold uppercase tracking-wider text-slate-400">Action Trigger (Start)</label>
@@ -163,30 +200,98 @@
 					</div>
 				</div>
 
-				<div id="duration-section" class="grid grid-cols-2 gap-4">
-					<div class="flex flex-col gap-2">
-						<label class="block text-xs font-semibold uppercase tracking-wider text-slate-400">Target Time</label>
-						<div class="flex items-center gap-2 bg-slate-900 border border-slate-700 rounded-lg px-3.5 py-3">
-							<input type="number" id="recharge-duration" min="5" max="180" value="30"
-								class="w-full bg-transparent text-sm text-slate-100 font-mono focus:outline-none" />
-							<span class="text-xs text-slate-500 font-semibold uppercase">Min</span>
-						</div>
-					</div>
-					<div class="flex flex-col gap-2">
-						<label class="block text-xs font-semibold uppercase tracking-wider text-slate-400">Max Cap Limit</label>
-						<div class="flex items-center gap-2 bg-slate-900 border border-slate-700 rounded-lg px-3.5 py-3">
-							<input type="number" id="recharge-max-time" min="5" max="240" value="45"
-								class="w-full bg-transparent text-sm text-slate-100 font-mono focus:outline-none" />
-							<span class="text-xs text-slate-500 font-semibold uppercase">Min</span>
-						</div>
-					</div>
-				</div>
-
 				<button type="submit"
 					class="cursor-pointer w-full bg-indigo-600 hover:bg-indigo-500 active:bg-indigo-700 text-slate-100 text-sm font-semibold py-3 rounded-lg transition-colors shadow-md">
 					Deploy Container
 				</button>
 			</form>
+		</div>
+
+		<div id="today-drawer"
+			class="drawer-content max-h-0 overflow-hidden transition-all duration-300 ease-in-out border-t border-slate-800/0">
+			<div class="p-5 space-y-5 bg-slate-950/40 rounded-b-xl border-x border-b border-slate-800">
+
+				<form id="edit-block-form" hidden class="flex flex-col gap-3 p-4 bg-slate-900 border border-indigo-500/40 rounded-xl">
+					<span id="edit-heading" class="block text-xs font-semibold uppercase tracking-wider text-slate-400">Edit block</span>
+
+					<div class="flex flex-col gap-1.5">
+						<label for="edit-title" class="block text-xs font-semibold uppercase tracking-wider text-slate-400">Title</label>
+						<input type="text" id="edit-title" autocomplete="off" class="w-full bg-slate-900 border border-slate-700 rounded-lg px-3.5 py-2.5 text-sm text-slate-100 focus:outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 placeholder:text-slate-500 transition-colors" />
+					</div>
+					<div class="flex flex-col gap-1.5">
+						<label for="edit-trigger" class="block text-xs font-semibold uppercase tracking-wider text-slate-400">First step</label>
+						<input type="text" id="edit-trigger" autocomplete="off" placeholder="The very first thing to do" class="w-full bg-slate-900 border border-slate-700 rounded-lg px-3.5 py-2.5 text-sm text-slate-100 focus:outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 placeholder:text-slate-500 transition-colors" />
+					</div>
+					<div class="flex flex-col gap-1.5">
+						<label for="edit-done" class="block text-xs font-semibold uppercase tracking-wider text-slate-400">Done when</label>
+						<input type="text" id="edit-done" autocomplete="off" placeholder="How you will know it is finished" class="w-full bg-slate-900 border border-slate-700 rounded-lg px-3.5 py-2.5 text-sm text-slate-100 focus:outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 placeholder:text-slate-500 transition-colors" />
+					</div>
+
+					<div id="edit-apps-section" class="flex flex-col gap-2">
+						<span class="block text-xs font-semibold uppercase tracking-wider text-slate-400">Opens when you start</span>
+						<div id="edit-apps" class="flex flex-wrap gap-2"></div>
+						<div class="flex gap-2">
+							<select id="edit-app-pick" class="flex-1 min-w-0 bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-100 focus:outline-none focus:border-indigo-500 [color-scheme:dark]"></select>
+							<button type="button" id="btn-edit-app-add"
+								class="cursor-pointer shrink-0 px-3 py-2 text-sm font-semibold text-slate-100 bg-slate-800 hover:bg-slate-700 rounded-lg transition-colors">Add app</button>
+						</div>
+						<div class="flex gap-2">
+							<input type="text" id="edit-app-url" autocomplete="off" placeholder="or paste a website address"
+								class="flex-1 min-w-0 bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-100 focus:outline-none focus:border-indigo-500 placeholder:text-slate-500" />
+							<button type="button" id="btn-edit-url-add"
+								class="cursor-pointer shrink-0 px-3 py-2 text-sm font-semibold text-slate-100 bg-slate-800 hover:bg-slate-700 rounded-lg transition-colors">Add site</button>
+						</div>
+					</div>
+
+					<p id="edit-error" hidden class="text-xs text-rose-400"></p>
+					<div class="flex gap-2 justify-end">
+						<button type="button" id="btn-edit-cancel"
+							class="cursor-pointer px-4 py-2 text-sm font-medium text-slate-300 bg-slate-800 hover:bg-slate-700 rounded-lg transition-colors">Cancel</button>
+						<button type="submit" id="btn-edit-save"
+							class="cursor-pointer px-4 py-2 text-sm font-semibold text-slate-100 bg-indigo-600 hover:bg-indigo-500 rounded-lg transition-colors">Save</button>
+					</div>
+				</form>
+
+				<div id="unattached-section" class="space-y-3">
+					<span class="block text-xs font-semibold uppercase tracking-wider text-slate-400">Needs a place today</span>
+					<p class="text-xs text-slate-500">These were left over from an earlier day or missed. Say what each one follows.</p>
+					<ul id="unattached-list" class="flex flex-col gap-2"></ul>
+				</div>
+
+				<div class="space-y-2">
+					<span class="block text-xs font-semibold uppercase tracking-wider text-slate-400">Today</span>
+					<ul id="today-list" class="flex flex-col gap-2"></ul>
+					<p id="today-error" hidden class="text-xs text-rose-400"></p>
+					<p id="today-empty" class="text-xs text-slate-500">Nothing is planned for today yet. Use Add to make a block.</p>
+				</div>
+			</div>
+		</div>
+
+		<div id="settings-drawer"
+			class="drawer-content max-h-0 overflow-hidden transition-all duration-300 ease-in-out border-t border-slate-800/0">
+			<div class="p-5 space-y-4 bg-slate-950/40 rounded-b-xl border-x border-b border-slate-800">
+				<div class="flex flex-col gap-2">
+					<span class="block text-xs font-semibold uppercase tracking-wider text-slate-400">Phone reminders</span>
+					<p class="text-xs text-slate-500">In the ntfy app, subscribe to this topic. Anyone who knows the name can read your reminders, so keep it private.</p>
+					<div class="flex gap-2">
+						<input type="text" id="ntfy-topic" readonly
+							class="flex-1 min-w-0 bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm font-mono text-slate-100 focus:outline-none focus:border-indigo-500" />
+						<button type="button" id="btn-ntfy-copy"
+							class="cursor-pointer shrink-0 px-3 py-2 text-sm font-semibold text-slate-100 bg-indigo-600 hover:bg-indigo-500 rounded-lg transition-colors">Copy</button>
+					</div>
+				</div>
+				<div class="flex flex-col gap-2">
+					<label for="ntfy-new-topic" class="block text-xs font-semibold uppercase tracking-wider text-slate-400">Use a different topic</label>
+					<div class="flex gap-2">
+						<input type="text" id="ntfy-new-topic" maxlength="64" autocomplete="off" placeholder="letters, digits, - and _"
+							class="flex-1 min-w-0 bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-100 focus:outline-none focus:border-indigo-500 placeholder:text-slate-500" />
+						<button type="button" id="btn-ntfy-save"
+							class="cursor-pointer shrink-0 px-3 py-2 text-sm font-semibold text-slate-100 bg-slate-800 hover:bg-slate-700 rounded-lg transition-colors">Save</button>
+					</div>
+				</div>
+				<p id="ntfy-error" hidden class="text-xs text-rose-400"></p>
+				<p id="ntfy-status" class="text-xs text-slate-400">No reminders sent yet.</p>
+			</div>
 		</div>
 
 		<div id="add-cue-drawer"
@@ -313,6 +418,14 @@
 			</select>
 			<p class="text-xs text-slate-500">How far your real start can drift either way. The planner uses the exact time, and two cues can not sit closer together than their flex allows.</p>
 		</div>
+
+		<label for="cue-ends-day" class="flex items-start gap-3 p-3 bg-slate-900/60 border border-slate-800 rounded-lg cursor-pointer">
+			<input type="checkbox" id="cue-ends-day" class="mt-0.5 w-4 h-4 accent-indigo-500" />
+			<span class="flex flex-col gap-1">
+				<span class="text-sm font-medium text-slate-100">This is the end of my day</span>
+				<span class="text-xs text-slate-500">Like bedtime. The blocks before it stop here, and nothing can be attached to it. Without one, your last cue runs until midnight.</span>
+			</span>
+		</label>
 
 		<p id="cue-error" hidden class="text-xs text-rose-400"></p>
 
