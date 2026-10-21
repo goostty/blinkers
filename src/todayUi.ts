@@ -2,6 +2,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { APP_CATALOG } from './appCatalog';
 import { addUnique, parseWebsite, type AppEntry } from './appTargets';
 import { onDayRefreshed, refreshDay, type LoadedDay } from './scheduleUi';
+import { cueRunsOn } from './cues';
 import { buildTodayRows, type TodayCommitment, type TodayRow, type Tone } from './todayRows';
 
 // What the edit form shows and sends back (EditableBlock / BlockEdit in containers.rs).
@@ -59,7 +60,10 @@ async function dropBlock(blockId: string) {
 function renderRow(row: TodayRow): HTMLElement {
   const item = document.createElement('li');
   item.dataset.blockId = row.blockId;
-  item.className = 'flex items-center gap-3 p-3 bg-slate-900 border border-slate-800 rounded-lg';
+  item.className =
+    row.kind === 'cue'
+      ? 'flex items-center gap-3 px-3 py-2 bg-indigo-950/40 border border-indigo-500/20 rounded-lg'
+      : 'flex items-center gap-3 p-3 bg-slate-900 border border-slate-800 rounded-lg';
 
   const text = document.createElement('div');
   text.className = 'flex flex-col min-w-0 flex-1';
@@ -99,7 +103,13 @@ async function render(day: LoadedDay) {
     console.error('Could not load the commitments for the Today list:', err);
   }
 
-  const rows = buildTodayRows(day.blocks, day.dayPlan.placements, commitments ?? []);
+  const rows = buildTodayRows(
+    day.blocks,
+    day.dayPlan.placements,
+    commitments ?? [],
+    day.dayPlan.breaks,
+    day.cues.filter((c) => !c.endsDay && cueRunsOn(c, { isoDate: day.isoDate, weekday: day.weekday })),
+  );
   list.replaceChildren(...rows.map(renderRow));
   const empty = el('today-empty');
   if (empty) empty.hidden = rows.length > 0;

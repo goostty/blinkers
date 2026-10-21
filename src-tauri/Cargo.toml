@@ -29,4 +29,5 @@ fs = "0.0.5"
 uuid = { version = "1.11", features = ["v4"] }
 tauri-plugin-store = "2"
 reqwest = "0.13"
+tauri-plugin-dialog = "2"
 

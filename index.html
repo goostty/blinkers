@@ -52,6 +52,14 @@
 					class="cursor-pointer px-1.5 py-0.5 text-[10px] font-bold text-amber-400 bg-amber-500/10 border border-amber-500/20 hover:bg-amber-500/20 rounded-full transition-colors"
 					title="Blocks that need a place today"></button>
 
+				<button id="btn-fit" hidden
+					class="cursor-pointer px-1.5 py-0.5 text-[10px] font-bold text-rose-300 bg-rose-500/10 border border-rose-500/20 hover:bg-rose-500/20 rounded-full transition-colors"
+					title="Today does not fit. Choose how to fix it.">Too full</button>
+
+				<button id="btn-sync" hidden
+					class="cursor-pointer px-1.5 py-0.5 text-[10px] font-bold text-amber-300 bg-amber-500/10 border border-amber-500/20 hover:bg-amber-500/20 rounded-full transition-colors"
+					title="Syncing between devices needs your attention">Sync</button>
+
 				<button id="btn-toggle-drawer"
 					class="cursor-pointer p-1 hover:bg-slate-800 rounded text-indigo-400 hover:text-indigo-300 transition-colors select-none"
 					title="Create Container">
@@ -166,13 +174,20 @@
 				</div>
 
 				<div id="attach-section" class="flex flex-col gap-2">
-					<label for="block-attach" class="block text-xs font-semibold uppercase tracking-wider text-slate-400">Follows</label>
+					<label id="attach-label" for="block-attach" class="block text-xs font-semibold uppercase tracking-wider text-slate-400">Follows</label>
 					<select id="block-attach"
 						class="w-full bg-slate-900 border border-slate-700 rounded-lg px-3.5 py-3 text-sm text-slate-100 focus:outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 transition-colors [color-scheme:dark]">
 						<option value="">Pick what it follows…</option>
 					</select>
-					<p class="text-xs text-slate-500">A cue, or another block. Blocks run one after another until the next cue.</p>
+					<p id="attach-suggestion" hidden class="text-xs text-indigo-300"></p>
+					<p id="attach-help" class="text-xs text-slate-500">A cue, or another block. Blocks run one after another until the next cue.</p>
 					<p id="attach-error" hidden class="text-xs text-rose-400"></p>
+					<div id="no-cues" hidden class="flex flex-col gap-2 p-3 bg-slate-900 border border-amber-500/30 rounded-lg">
+						<p class="text-xs text-slate-300">You have no cues for today, so the app has nothing to schedule around. A cue is a moment in your day, like waking up or dinner.</p>
+						<button type="button" id="btn-seed-cues"
+							class="cursor-pointer self-start px-3 py-1.5 text-xs font-semibold text-slate-100 bg-indigo-600 hover:bg-indigo-500 rounded-lg transition-colors">Add a typical day of cues</button>
+						<p id="seed-error" hidden class="text-xs text-rose-400"></p>
+					</div>
 				</div>
 
 				<div id="grid-section" class="grid grid-cols-2 gap-4">
@@ -254,9 +269,11 @@
 
 				<div id="unattached-section" class="space-y-3">
 					<span class="block text-xs font-semibold uppercase tracking-wider text-slate-400">Needs a place today</span>
-					<p class="text-xs text-slate-500">These were left over from an earlier day or missed. Say what each one follows.</p>
+					<p class="text-xs text-slate-500">These are waiting for room: left over from an earlier day, or with no time left today. The app places them as soon as there is room, or you can pick a place yourself.</p>
 					<ul id="unattached-list" class="flex flex-col gap-2"></ul>
 				</div>
+
+				<div id="fit-panel" hidden class="flex flex-col gap-2 p-3 bg-slate-900 border border-rose-500/30 rounded-lg"></div>
 
 				<div class="space-y-2">
 					<span class="block text-xs font-semibold uppercase tracking-wider text-slate-400">Today</span>
@@ -270,6 +287,37 @@
 		<div id="settings-drawer"
 			class="drawer-content max-h-0 overflow-hidden transition-all duration-300 ease-in-out border-t border-slate-800/0">
 			<div class="p-5 space-y-4 bg-slate-950/40 rounded-b-xl border-x border-b border-slate-800">
+				<label class="flex items-start gap-3 cursor-pointer">
+					<input type="checkbox" id="auto-place" checked class="mt-1 accent-indigo-500" />
+					<span class="flex flex-col gap-0.5">
+						<span class="text-sm font-medium text-slate-100">Place blocks for me</span>
+						<span class="text-xs text-slate-500">The app decides where each block goes, including the first one after a cue, and moves things as your day changes. Turn it off to choose each place yourself.</span>
+					</span>
+				</label>
+				<div id="sync-section" class="flex flex-col gap-2">
+					<span class="block text-xs font-semibold uppercase tracking-wider text-slate-400">Sync between devices</span>
+					<p id="sync-status" class="text-xs text-slate-400">Syncing is off.</p>
+					<p id="sync-folder" hidden class="text-xs font-mono text-slate-500 break-all"></p>
+					<p id="sync-warning" hidden class="text-xs text-amber-400"></p>
+					<p id="sync-message" hidden class="text-xs text-emerald-400"></p>
+					<p id="sync-error" hidden class="text-xs text-rose-400"></p>
+					<div class="flex flex-wrap gap-2">
+						<button type="button" id="btn-sync-folder"
+							class="cursor-pointer px-3 py-2 text-sm font-semibold text-slate-100 bg-indigo-600 hover:bg-indigo-500 rounded-lg transition-colors">Choose folder…</button>
+						<button type="button" id="btn-sync-now" hidden
+							class="cursor-pointer px-3 py-2 text-sm font-semibold text-slate-100 bg-slate-800 hover:bg-slate-700 rounded-lg transition-colors">Sync now</button>
+						<button type="button" id="btn-sync-off" hidden
+							class="cursor-pointer px-3 py-2 text-sm font-semibold text-slate-300 bg-slate-800 hover:bg-rose-600 hover:text-slate-100 rounded-lg transition-colors">Stop syncing</button>
+					</div>
+					<div id="sync-conflict" hidden class="flex flex-col gap-2 p-3 bg-slate-900 border border-amber-500/30 rounded-lg">
+						<p class="text-xs text-slate-300">Which copy do you want to keep? The one you do not keep is saved in a backups folder first, so this can be undone by hand.</p>
+						<button type="button" id="btn-keep-this"
+							class="cursor-pointer px-3 py-2 text-sm font-semibold text-slate-100 bg-slate-800 hover:bg-slate-700 rounded-lg transition-colors">Keep this device's data</button>
+						<button type="button" id="btn-keep-other"
+							class="cursor-pointer px-3 py-2 text-sm font-semibold text-slate-100 bg-slate-800 hover:bg-slate-700 rounded-lg transition-colors">Keep the other device's data</button>
+					</div>
+					<p class="text-xs text-slate-500">Pick a folder that iCloud Drive, Dropbox, Google Drive or Syncthing keeps the same on your devices. Use one device at a time: Blinkers loads newer data when it opens and saves when you work and when you close it.</p>
+				</div>
 				<div class="flex flex-col gap-2">
 					<span class="block text-xs font-semibold uppercase tracking-wider text-slate-400">Phone reminders</span>
 					<p class="text-xs text-slate-500">In the ntfy app, subscribe to this topic. Anyone who knows the name can read your reminders, so keep it private.</p>

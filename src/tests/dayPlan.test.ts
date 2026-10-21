@@ -55,15 +55,17 @@ describe('planDay: placing blocks in their chains', () => {
       MON,
     );
     expect(placement(p, 'a')).toMatchObject({ kind: 'placed', cueId: 'morning', startMin: 480, endMin: 525 });
-    expect(placement(p, 'b')).toMatchObject({ kind: 'placed', startMin: 525, endMin: 555 });
+    // a 45 minute work block earns a 9 minute break (525 to 534) before b
+    expect(placement(p, 'b')).toMatchObject({ kind: 'placed', startMin: 534, endMin: 564 });
     expect(p.plan).toEqual([
       { blockId: 'a', cueId: 'morning', startMin: 480, durationMin: 45 },
-      { blockId: 'b', cueId: 'morning', startMin: 525, durationMin: 30 },
+      { blockId: 'b', cueId: 'morning', startMin: 534, durationMin: 30 },
     ]);
   });
 
   it('does not plan a block that would run past the end of the day, and says it moves to tomorrow', () => {
-    const p = planDay([block('long', afterCue('morning'), 900)], [morning, bed], MON); // 08:00 + 15h > 22:00
+    // 08:00 + 23h is past 22:00, and even shortened by a third (to about 15h) it would not fit
+    const p = planDay([block('long', afterCue('morning'), 1380)], [morning, bed], MON);
     expect(placement(p, 'long').kind).toBe('overflow');
     expect(placement(p, 'long').reason).toMatch(/tomorrow/i);
     expect(inPlan(p, 'long')).toBeUndefined();
@@ -92,7 +94,8 @@ describe('planDay: placing blocks in their chains', () => {
       [morning, bed],
       MON,
     );
-    expect(placement(p, 'b')).toMatchObject({ startMin: 510, endMin: 540 });
+    // a ended at 510 and earned a 12 minute break, so b starts at 522
+    expect(placement(p, 'b')).toMatchObject({ startMin: 522, endMin: 552 });
   });
 
   it('keeps a finished block in the plan as placed', () => {
@@ -143,7 +146,8 @@ describe('planDay: the daily limits', () => {
       [morning, bed],
       MON,
     );
-    expect(placement(p, 'c')).toMatchObject({ kind: 'placed', startMin: 480 + 300, endMin: 480 + 330 });
+    // a ends at 780 and earns the longest break, 20 minutes, so c starts at 800
+    expect(placement(p, 'c')).toMatchObject({ kind: 'placed', startMin: 800, endMin: 830 });
   });
 
   it('never rolls a Q1 block the user has already started', () => {
@@ -177,7 +181,12 @@ describe('planDay: the daily limits', () => {
 
 describe('planDay: purity and edge cases', () => {
   it('plans nothing for an empty day', () => {
-    expect(planDay([], [morning], MON)).toEqual({ placements: [], plan: [] });
+    expect(planDay([], [morning], MON)).toEqual({
+      placements: [],
+      plan: [],
+      breaks: [],
+      fit: { needsDecision: false, applied: null, recommended: null, shortenPercent: null, dropped: [] },
+    });
   });
 
   it('gives every block exactly one placement', () => {
@@ -247,7 +256,145 @@ describe('cues that belong to one date', () => {
 
   it('treats a cue made for today as a fixed moment, so the chain before it must fit', () => {
     const cues = [cue('morning', 9), once('midday', 10, WED_DATE)];
-    const plan = planDay([block('long', afterCue('morning'), 90)], cues, WED, WED_DATE);
-    expect(plan.placements[0].kind).toBe('overflow'); // 9:00 + 90 min runs past the 10:00 cue
+    const plan = planDay([block('long', afterCue('morning'), 150)], cues, WED, WED_DATE);
+    expect(plan.placements[0].kind).toBe('overflow'); // 9:00 + 150 min runs past the 10:00 cue, even shortened
+  });
+});
+
+describe('planDay: recharge breaks', () => {
+  it('leaves room for a break between two work blocks and reports it', () => {
+    const p = planDay(
+      [block('a', afterCue('morning'), 50), block('b', afterBlock('a'), 50)],
+      [morning, bed],
+      MON,
+    );
+    expect(p.breaks).toEqual([{ afterBlockId: 'a', cueId: 'morning', startMin: 530, endMin: 540 }]);
+    expect(placement(p, 'b')).toMatchObject({ kind: 'placed', startMin: 540, endMin: 590 });
+    expect(inPlan(p, 'b')).toMatchObject({ startMin: 540 });
+  });
+
+  it('has no breaks when there is only one block', () => {
+    const p = planDay([block('a', afterCue('morning'), 50)], [morning, bed], MON);
+    expect(p.breaks).toEqual([]);
+  });
+
+  it('closes the chain up around a rolled block, so the break is not left behind for it', () => {
+    // b is rolled by the Q1 limit, so a and c are neighbours again and share a single break.
+    const p = planDay(
+      [
+        block('a', afterCue('morning'), 300, { urgency: Q1, orderIndex: 0 }),
+        block('b', afterBlock('a'), 200, { urgency: Q1, orderIndex: 1 }),
+        block('c', afterBlock('b'), 30, { urgency: 'important', orderIndex: 2 }),
+      ],
+      [morning, bed],
+      MON,
+    );
+    expect(placement(p, 'b').kind).toBe('capped');
+    expect(p.breaks).toEqual([{ afterBlockId: 'a', cueId: 'morning', startMin: 780, endMin: 800 }]);
+  });
+});
+
+describe('planDay: a day that does not fit', () => {
+  const noon = cue('noon', 12);
+  const tight = [morning, noon, bed]; // 08:00 to 12:00 is 240 minutes
+  const full = () => [
+    block('a', afterCue('morning'), 130, { urgency: Q3 }),
+    block('b', afterBlock('a'), 130, { urgency: Q1 }),
+  ]; // 260 minutes in 240
+
+  it('recommends shortening, applies it for now, and says a decision is waiting', () => {
+    const p = planDay(full(), tight, MON);
+    // 130 + a 20 minute break + 130 is 280 minutes in 240, so everything, the break included,
+    // has to come down 15%: 111 + 17 + 111 = 239
+    expect(p.fit).toMatchObject({ needsDecision: true, applied: 'shorten', recommended: 'shorten', shortenPercent: 15 });
+    expect(placement(p, 'a')).toMatchObject({ kind: 'placed', startMin: 480, endMin: 591 });
+    expect(placement(p, 'b')).toMatchObject({ kind: 'placed', startMin: 608, endMin: 719 });
+    expect(inPlan(p, 'a')!.durationMin).toBe(111); // saved at the shortened length
+  });
+
+  it('says how much shorter a block was made', () => {
+    const p = planDay(full(), tight, MON);
+    expect(placement(p, 'a').reason).toMatch(/111 min/);
+  });
+
+  it('drops the lowest priority block when the user chose to drop, and asks no more', () => {
+    const p = planDay(full(), tight, MON, undefined, { fit: 'drop' });
+    expect(p.fit).toMatchObject({ needsDecision: false, applied: 'drop' });
+    expect(placement(p, 'a').kind).toBe('overflow');
+    expect(placement(p, 'a').reason).toMatch(/tomorrow/i);
+    expect(placement(p, 'a').reason).toMatch(/room/i); // it fitted itself, it was dropped for b
+    expect(placement(p, 'b')).toMatchObject({ kind: 'placed', startMin: 480, endMin: 610 });
+    expect(inPlan(p, 'a')).toBeUndefined();
+  });
+
+  it('says why a block that is itself too long moves to tomorrow', () => {
+    const p = planDay([block('long', afterCue('morning'), 900)], tight, MON);
+    expect(placement(p, 'long').kind).toBe('overflow');
+    expect(placement(p, 'long').reason).toMatch(/does not fit/i);
+  });
+
+  it('asks no more once the user chose to shorten', () => {
+    const p = planDay(full(), tight, MON, undefined, { fit: 'shorten' });
+    expect(p.fit).toMatchObject({ needsDecision: false, applied: 'shorten' });
+  });
+
+  it('asks again when a chosen shortening is no longer enough', () => {
+    const p = planDay(
+      [block('a', afterCue('morning'), 200, { urgency: Q3 }), block('b', afterBlock('a'), 200, { urgency: Q1 })],
+      tight,
+      MON,
+      undefined,
+      { fit: 'shorten' },
+    ); // 400 minutes in 240 needs far more than shortening can give
+    expect(p.fit).toMatchObject({ needsDecision: true, applied: 'drop', recommended: 'drop', shortenPercent: null });
+  });
+
+  it('keeps the old behaviour when adjusting is switched off, so a suggestion never reshapes the day', () => {
+    const p = planDay(full(), tight, MON, undefined, { fit: 'off' });
+    expect(placement(p, 'b').kind).toBe('overflow');
+    expect(p.fit.needsDecision).toBe(false);
+  });
+
+  it('has nothing to decide when the day fits', () => {
+    const p = planDay([block('a', afterCue('morning'), 60)], tight, MON);
+    expect(p.fit).toEqual({ needsDecision: false, applied: null, recommended: null, shortenPercent: null, dropped: [] });
+  });
+
+  it('never drops a block the user has started', () => {
+    const p = planDay(
+      [
+        block('a', afterCue('morning'), 130, { urgency: Q3, committed: true, startedAtMin: 480 }),
+        block('b', afterBlock('a'), 130, { urgency: Q1 }),
+      ],
+      tight,
+      MON,
+      undefined,
+      { fit: 'drop', nowMin: 490 },
+    );
+    expect(placement(p, 'a').kind).toBe('placed');
+    expect(placement(p, 'b').kind).toBe('overflow');
+  });
+});
+
+describe('planDay: following the clock', () => {
+  const noon = cue('noon', 12);
+  const tight = [morning, noon, bed];
+
+  it('lets a running block that is past its end push the blocks behind it', () => {
+    const p = planDay(
+      [block('a', afterCue('morning'), 60, { committed: true, startedAtMin: 480 }), block('b', afterBlock('a'), 30)],
+      tight,
+      MON,
+      undefined,
+      { nowMin: 600 }, // 10:00, and a has been running for two hours
+    );
+    // a ends at 10:00 (now) and, being deep work, earns a 12 minute break before b
+    expect(placement(p, 'b')).toMatchObject({ kind: 'placed', startMin: 612 });
+  });
+
+  it('never starts a block that has not started before the "not before" time', () => {
+    const p = planDay([block('a', afterCue('morning'), 60), block('b', afterBlock('a'), 30)], tight, MON, undefined, { notBeforeMin: 540 });
+    expect(placement(p, 'a')).toMatchObject({ startMin: 540, endMin: 600 });
+    expect(placement(p, 'b').startMin).toBe(612); // after a 12 minute break
   });
 });

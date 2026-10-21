@@ -1,6 +1,6 @@
 import { canFinish } from './finish';
 
-export type BlockActionKind = 'start' | 'finish' | 'lapse' | 'reschedule' | 'drop';
+export type BlockActionKind = 'start' | 'finish' | 'lapse' | 'continue' | 'reschedule' | 'drop';
 
 // `waitSec` is how long until a disabled button turns on; 0 when it is already enabled.
 export interface BlockAction {
@@ -19,8 +19,9 @@ export interface BlockActions {
 // one the backend would refuse: Start before it begins, Finish after half the entered length,
 // and Lapse only once the whole length has run out since Start. Lapse waits for the full length
 // on purpose: it is for a block whose time ran out, not a way to quit early, so giving up costs
-// more than finishing. A missed block gets Reschedule and Drop. A status this code does not know
-// shows nothing rather than guessing.
+// more than finishing. A missed block gets Continue (start it right now, and everything behind it
+// moves later), Reschedule (put it somewhere new) and Drop (give it up, and everything behind it
+// moves up). A status this code does not know shows nothing rather than guessing.
 export function blockActions(
   c: { status: string; startedAt: number | null; durationMin: number },
   nowSec: number,
@@ -45,11 +46,12 @@ export function blockActions(
       };
     }
 
-    // A missed block can still be saved: put it somewhere new or give it up. Neither waits, because
-    // the time that mattered has already gone.
+    // A missed block can still be saved: do it now, put it somewhere new, or give it up. None of
+    // them waits, because the time that mattered has already gone.
     case 'missed':
       return {
         actions: [
+          { action: 'continue', enabled: true, waitSec: 0 },
           { action: 'reschedule', enabled: true, waitSec: 0 },
           { action: 'drop', enabled: true, waitSec: 0 },
         ],

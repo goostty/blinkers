@@ -1,8 +1,13 @@
 import { invoke } from '@tauri-apps/api/core';
 import { attachOptions, parseAttach, type AttachOption } from './attach';
-import type { Cue, Weekday } from './cues';
+import { nextToPlace } from './autoPlace';
+import { cueRunsOn, type Cue, type Weekday } from './cues';
+import { loadChoices, minuteOfDay, setFitChoice } from './dayState';
 import { placementText, planDay, type DayBlock, type DayPlan } from './dayPlan';
+import type { UserProfile } from './energy';
+import { autoPlaceEnabled } from './prefs';
 import { describeMoment } from './scheduler';
+import { suggestSlot, type NewBlock, type Suggestion } from './suggest';
 
 export function todayKey(): string {
   return describeMoment(new Date()).isoDate;
@@ -14,6 +19,17 @@ export interface LoadedDay {
   cues: Cue[];
   blocks: DayBlock[];
   dayPlan: DayPlan;
+  profile: UserProfile; // the energy curve the suggestions are matched against
+  nowMin: number; // the minute the day was planned at
+  overrunning: boolean; // a started block is past its end, so the plan keeps moving with the clock
+}
+
+// What planning needs to know about the day's commitments: when blocks really started.
+interface StartedCommitment {
+  blockId: string;
+  status: string;
+  durationMin: number;
+  startedAt: number | null; // unix seconds
 }
 
 // Whoever shows the day (the Today list) is told each time it has been planned again.
@@ -29,12 +45,32 @@ const el = <T extends HTMLElement>(id: string) => document.getElementById(id) as
 // plan is always the user's latest links applied to the day's rules.
 async function planToday(): Promise<LoadedDay> {
   const when = describeMoment(new Date());
-  const [cues, blocks] = await Promise.all([
+  const [cues, listed, profile, commitments] = await Promise.all([
     invoke<Cue[]>('list_cues'),
     invoke<DayBlock[]>('list_day_blocks', { on: when.isoDate }),
+    // Only the suggestions use the profile, so failing to read it must not stop the day loading.
+    invoke<UserProfile | null>('get_profile').catch(() => null),
+    // Without the commitments the plan still works, it just cannot see when blocks really started.
+    invoke<StartedCommitment[]>('list_commitments', { on: when.isoDate }).catch(() => [] as StartedCommitment[]),
   ]);
 
-  const dayPlan = planDay(blocks, cues, when.weekday, when.isoDate);
+  // The plan follows what happened: a block begins when it was really started, and one still
+  // running past its end keeps the time it is using.
+  const startedAt = new Map((commitments ?? []).filter((c) => c.startedAt != null).map((c) => [c.blockId, minuteOfDay(c.startedAt!)]));
+  const blocks = listed.map((b) => (startedAt.has(b.id) ? { ...b, startedAtMin: startedAt.get(b.id)! } : b));
+  const overrunning = (commitments ?? []).some(
+    (c) => c.status === 'started' && c.startedAt != null && minuteOfDay(c.startedAt) + c.durationMin <= when.nowMin,
+  );
+
+  const choices = loadChoices(when.isoDate);
+  const dayPlan = planDay(blocks, cues, when.weekday, when.isoDate, {
+    nowMin: when.nowMin,
+    notBeforeMin: choices.notBeforeMin,
+    fit: choices.fit,
+  });
+  // A choice was made for a day that did not fit. Once it fits again the choice is spent, so a
+  // later problem asks again instead of silently reusing it.
+  if (choices.fit && dayPlan.fit.applied === null) setFitChoice(when.isoDate, undefined);
 
   // Saving the plan failing must not hide what the user is waiting to see.
   try {
@@ -43,7 +79,45 @@ async function planToday(): Promise<LoadedDay> {
     console.error('Could not save the plan:', err);
   }
 
-  return { isoDate: when.isoDate, weekday: when.weekday, cues, blocks, dayPlan };
+  return {
+    isoDate: when.isoDate,
+    weekday: when.weekday,
+    cues,
+    blocks,
+    dayPlan,
+    profile: profile ?? { chronotype: 'neutral' },
+    nowMin: when.nowMin,
+    overrunning,
+  };
+}
+
+let lastDay: LoadedDay | null = null;
+
+// Whether any cue runs today. Every block is placed after a cue, so without one there is nothing
+// to schedule around. True until the day has been planned, so the notice does not flash at startup.
+export function todayHasCues(): boolean {
+  if (!lastDay) return true;
+  const today = { isoDate: lastDay.isoDate, weekday: lastDay.weekday };
+  return lastDay.cues.some((c) => !c.endsDay && cueRunsOn(c, today));
+}
+
+// Where `block` would best go in the day as it was last planned. `leaving` is a block already in
+// the list that is being placed (a waiting one): it must not count against itself.
+function suggestFor(day: LoadedDay, block: NewBlock, leaving?: string): Suggestion {
+  return suggestSlot({
+    block,
+    blocks: day.blocks.filter((b) => b.id !== leaving),
+    cues: day.cues,
+    weekday: day.weekday,
+    isoDate: day.isoDate,
+    nowMin: describeMoment(new Date()).nowMin,
+    profile: day.profile,
+  });
+}
+
+// For the new-block form. Null until the day has been planned once.
+export function suggestForNewBlock(block: NewBlock): Suggestion | null {
+  return lastDay ? suggestFor(lastDay, block) : null;
 }
 
 function fillOptions(select: HTMLSelectElement, options: AttachOption[], placeholder: string) {
@@ -100,6 +174,17 @@ function renderUnattached(day: LoadedDay, options: AttachOption[]) {
       'flex-1 min-w-0 bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-100 focus:outline-none focus:border-indigo-500 [color-scheme:dark]';
     fillOptions(select, options, 'Pick what it follows…');
 
+    // The place is suggested the same way as in the new-block form; the user still presses Attach.
+    const suggestion = suggestFor(
+      day,
+      { blockType: block.blockType, urgency: block.urgency, durationMin: block.durationMin, title: block.title },
+      block.id,
+    );
+    if (suggestion.kind === 'slot') select.value = `${suggestion.parent.kind}:${suggestion.parent.id}`;
+    const why = document.createElement('span'); // a span, so the error below stays the row's only <p>
+    why.className = 'text-xs text-indigo-300';
+    why.textContent = suggestion.kind === 'slot' ? `Suggested: ${suggestion.reason}` : suggestion.reason;
+
     const button = document.createElement('button');
     button.type = 'button';
     button.textContent = 'Attach';
@@ -147,20 +232,72 @@ function renderUnattached(day: LoadedDay, options: AttachOption[]) {
     });
 
     controls.append(select, button, drop);
-    row.append(name, controls, error);
+    row.append(name, why, controls, error);
     list.append(row);
   }
 }
 
+// While a started block runs past its end the plan moves with the clock, so the day is planned
+// again; on a day where nothing is overrunning this costs nothing.
+export async function replanIfOverrunning() {
+  if (lastDay?.overrunning) await refreshDay();
+}
+
+const OVERRUN_CHECK_MS = 30_000;
+export function startOverrunWatch() {
+  setInterval(() => void replanIfOverrunning(), OVERRUN_CHECK_MS);
+}
+
+// Places the blocks that are waiting, one at a time, planning again after each because every block
+// that goes in changes the room left for the next. A block is tried once per round, so one the
+// backend refuses is left waiting instead of being retried forever.
+async function placeWaiting(first: LoadedDay): Promise<LoadedDay> {
+  let day = first;
+  const tried = new Set<string>();
+  for (let round = 0; round <= first.blocks.length; round++) {
+    const next = nextToPlace({
+      blocks: day.blocks,
+      cues: day.cues,
+      weekday: day.weekday,
+      isoDate: day.isoDate,
+      nowMin: describeMoment(new Date()).nowMin,
+      profile: day.profile,
+      skip: tried,
+    });
+    if (!next) break;
+    tried.add(next.blockId);
+    try {
+      await invoke('attach_block', { blockId: next.blockId, parent: next.parent, on: day.isoDate });
+    } catch (err) {
+      console.error('Could not place a block:', err);
+      continue;
+    }
+    day = await planToday();
+  }
+  return day;
+}
+
+// Refreshes run one after another. Placing makes several backend calls, and a refresh that started
+// before the user's last action must not finish after one that saw it.
+let queue: Promise<unknown> = Promise.resolve();
+export function refreshDay(): Promise<LoadedDay | null> {
+  const run = queue.then(refresh, refresh);
+  queue = run;
+  return run;
+}
+
 // Re-plans today and brings the screen in line: the "follows" choices in the new-block form and
-// the list of blocks still waiting for a place.
-export async function refreshDay(): Promise<LoadedDay | null> {
+// the list of blocks still waiting for a place. Unless the user turned it off, the app places those
+// blocks itself first.
+async function refresh(): Promise<LoadedDay | null> {
   try {
-    const day = await planToday();
+    let day = await planToday();
+    if (autoPlaceEnabled()) day = await placeWaiting(day);
+    lastDay = day;
     const options = attachOptions(day.cues, day.blocks, day.dayPlan, day.weekday, day.isoDate);
 
     const select = el<HTMLSelectElement>('block-attach');
-    if (select) fillOptions(select, options, 'Pick what it follows…');
+    if (select) fillOptions(select, options, autoPlaceEnabled() ? 'Automatic: the app picks' : 'Pick what it follows…');
     renderUnattached(day, options);
     dayListeners.forEach((listener) => listener(day));
     return day;

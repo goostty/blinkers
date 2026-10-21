@@ -4,7 +4,17 @@
 //
 //   cue 15:00 ──► deep 45m ──► routine 30m ──► rest 20m      cue 18:00 ──► ...
 //
-// It is pure: nothing here reads the clock or the database.
+// Between two work blocks the walk also leaves room for a recharge break (see breaks.ts). A break
+// is not a block: it is never stored, only worked out here, so it cannot go stale.
+//
+//   cue 15:00 ──► deep 50m ──► recharge 10m ──► routine 30m ──► recharge 3m ──► deep 50m
+//
+// Times are projections, not appointments: block lengths are estimates, so the plan follows what
+// has actually happened. A finished block ends when it was finished, a started block began when it
+// was started and, while it is still running, ends no earlier than now. The current time is passed
+// in, so this stays pure: nothing here reads the clock or the database.
+import { breaksAfter } from './breaks';
+import type { BlockType } from './scheduler';
 
 export type NodeRef = { kind: 'cue'; id: string } | { kind: 'block'; id: string };
 
@@ -21,7 +31,9 @@ export interface TimelineBlock {
   id: string;
   durationMin: number; // as the user entered it; deep work is padded by the user, not here
   parent: NodeRef | null; // null = not attached yet
+  startedAtMin?: number; // when the user pressed Start, if they did
   endedAtMin?: number; // when the user finished it, if they did
+  blockType?: BlockType; // without it the block earns no recharge break, and is not one to wait for
 }
 
 export interface TimelineEntry {
@@ -33,6 +45,15 @@ export interface TimelineEntry {
   fits: boolean; // false = it would run past the next cue (or midnight)
 }
 
+// A recharge break placed after a block. It always fits: a break that would push the next block
+// past the next cue is not placed at all.
+export interface TimelineBreak {
+  afterBlockId: string;
+  cueId: string;
+  startMin: number;
+  endMin: number;
+}
+
 export interface TimelineProblem {
   blockId: string;
   reason: string;
@@ -40,11 +61,29 @@ export interface TimelineProblem {
 
 export interface Timeline {
   entries: TimelineEntry[];
+  breaks: TimelineBreak[];
   unattached: string[];
   invalid: TimelineProblem[];
 }
 
 const DAY = 1440;
+
+// Minutes of recharge between a block and the one after it, 0 when either has no type.
+function breakAfter(block: TimelineBlock, next: TimelineBlock | undefined): number {
+  if (!next || !block.blockType || !next.blockType) return 0;
+  const chain = [block, next].map((b) => ({ id: b.id, blockType: b.blockType!, durationMin: b.durationMin }));
+  return breaksAfter(chain).get(block.id) ?? 0;
+}
+
+const hasHappened = (b: TimelineBlock) => b.startedAtMin !== undefined || b.endedAtMin !== undefined;
+
+// A length shortened by the scale, to whole minutes and never under one. 0 stays 0 (no break).
+const scaled = (minutes: number, options: TimelineOptions) =>
+  minutes > 0 && options.scale !== undefined && options.scale < 1 ? Math.max(1, Math.round(minutes * options.scale)) : minutes;
+
+// What has happened keeps the length it really had; only a block still to come can be shortened.
+const lengthOf = (b: TimelineBlock, options: TimelineOptions) => (hasHappened(b) ? b.durationMin : scaled(b.durationMin, options));
+
 const key = (ref: NodeRef) => `${ref.kind}:${ref.id}`;
 
 // Time only ever moves forward through a chain, and the clock is what moves it: a block
@@ -54,7 +93,23 @@ const key = (ref: NodeRef) => `${ref.kind}:${ref.id}`;
 // so a chain that no longer fills its gap simply leaves free time before that cue.
 // Anything that cannot be placed is reported instead of guessed at: a bad link must never hide
 // a block or hang the planner.
-export function buildTimeline(blocks: TimelineBlock[], cues: TimelineCue[]): Timeline {
+// `nowMin` lets a running block keep the time it is really using. `notBeforeMin` is the earliest a
+// block that has not started may begin: set when the day is re-planned after a decision, so
+// nothing is ever placed in the past. Neither moves a block that has already started or finished.
+//
+// `scale` (for example 0.8) shortens every block that has not started, and the breaks between
+// them, by the same share. It is how "shorten everything" is planned; 1 or nothing leaves lengths
+// as entered.
+export interface TimelineOptions {
+  nowMin?: number;
+  notBeforeMin?: number;
+  scale?: number;
+  // Put a break in even when it pushes the next block past the cue, which then shows as not
+  // fitting. Shortening needs this: it must shrink the breaks, not quietly remove them.
+  keepBreaks?: boolean;
+}
+
+export function buildTimeline(blocks: TimelineBlock[], cues: TimelineCue[], options: TimelineOptions = {}): Timeline {
   const sortedCues = [...cues].sort((a, b) => a.timeMin - b.timeMin);
   const cueIds = new Set(sortedCues.map((c) => c.id));
   const blockById = new Map(blocks.map((b) => [b.id, b]));
@@ -63,6 +118,7 @@ export function buildTimeline(blocks: TimelineBlock[], cues: TimelineCue[]): Tim
   const problems = new Map<string, string>();
   const reached = new Set<string>();
   const entries: TimelineEntry[] = [];
+  const breaks: TimelineBreak[] = [];
 
   const children = new Map<string, TimelineBlock[]>();
   for (const b of blocks) {
@@ -102,10 +158,17 @@ export function buildTimeline(blocks: TimelineBlock[], cues: TimelineCue[]): Tim
         break;
       }
 
-      const startMin = cursor;
-      const plannedEnd = startMin + node.durationMin;
+      const happened = hasHappened(node);
+      const startMin = node.startedAtMin ?? (happened ? cursor : Math.max(cursor, options.notBeforeMin ?? 0));
+      const plannedEnd = startMin + lengthOf(node, options);
+      // What happened wins over the estimate: a finished block ends when it was finished, even
+      // if late, and one that is still running ends no earlier than now.
       const endMin =
-        node.endedAtMin === undefined ? plannedEnd : Math.max(startMin, Math.min(plannedEnd, node.endedAtMin));
+        node.endedAtMin !== undefined
+          ? Math.max(startMin, node.endedAtMin)
+          : node.startedAtMin !== undefined
+            ? Math.max(plannedEnd, options.nowMin ?? plannedEnd)
+            : plannedEnd;
 
       entries.push({
         blockId: node.id,
@@ -113,11 +176,24 @@ export function buildTimeline(blocks: TimelineBlock[], cues: TimelineCue[]): Tim
         position: position++,
         startMin,
         endMin,
-        fits: plannedEnd <= limit,
+        // Something that already happened cannot be moved, so it always counts as fitting; the
+        // blocks behind it are the ones that give way.
+        fits: happened || plannedEnd <= limit,
       });
 
-      cursor = endMin;
-      node = nextAfter({ kind: 'block', id: node.id });
+      // The break follows the block just done. The cues are fixed commitments, so a break only
+      // takes the time if the next block still fits before the next cue with it in front. A block
+      // that has already started has its time fixed, so nothing is put in front of it.
+      const next = nextAfter({ kind: 'block', id: node.id });
+      const breakMin = next && !hasHappened(next) ? scaled(breakAfter(node, next), options) : 0;
+      const nextStart = Math.max(endMin + breakMin, options.notBeforeMin ?? 0);
+      if (next && breakMin > 0 && (options.keepBreaks || nextStart + lengthOf(next, options) <= limit)) {
+        breaks.push({ afterBlockId: node.id, cueId: cue.id, startMin: endMin, endMin: endMin + breakMin });
+        cursor = endMin + breakMin;
+      } else {
+        cursor = endMin;
+      }
+      node = next;
     }
   });
 
@@ -136,9 +212,11 @@ export function buildTimeline(blocks: TimelineBlock[], cues: TimelineCue[]): Tim
   }
 
   entries.sort((a, b) => a.startMin - b.startMin || a.position - b.position);
+  breaks.sort((a, b) => a.startMin - b.startMin);
 
   return {
     entries,
+    breaks,
     unattached,
     invalid: [...problems].map(([blockId, reason]) => ({ blockId, reason })),
   };

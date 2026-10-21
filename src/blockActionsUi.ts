@@ -6,6 +6,7 @@ import { formatClock } from './cues';
 import type { DayBlock } from './dayPlan';
 import { pickFocus, pickMissed } from './focus';
 import { describeMoment } from './scheduler';
+import { raiseNotBefore } from './dayState';
 import { refreshDay, todayKey } from './scheduleUi';
 
 // A commitment as the backend lists it (see Commitment in commitments.rs).
@@ -35,13 +36,15 @@ const BUTTON_LABEL: Record<BlockActionKind, string> = {
   start: 'Start',
   finish: 'Finish',
   lapse: 'Lapse',
+  continue: 'Continue',
   reschedule: 'Reschedule',
-  drop: 'Drop',
+  drop: 'Abandon', // only a missed block offers it; the Today list's own button still says Drop
 };
 const BUTTON_STYLE: Record<BlockActionKind, string> = {
   start: 'bg-indigo-600 hover:bg-indigo-500 text-slate-100',
   finish: 'bg-emerald-600 hover:bg-emerald-500 text-slate-100',
   lapse: 'bg-slate-800 hover:bg-rose-600 text-slate-300 hover:text-slate-100',
+  continue: 'bg-emerald-600 hover:bg-emerald-500 text-slate-100',
   reschedule: 'bg-indigo-600 hover:bg-indigo-500 text-slate-100',
   drop: 'bg-slate-800 hover:bg-rose-600 text-slate-300 hover:text-slate-100',
 };
@@ -108,9 +111,14 @@ async function perform(action: BlockActionKind, blockId: string) {
   error = '';
   const on = todayKey();
   const nowUnix = Math.floor(Date.now() / 1000);
+  const nowMin = describeMoment(new Date()).nowMin;
   try {
     if (action === 'start') {
       const started = await invoke<StartedBlock>('start_block', { blockId, on, nowUnix });
+      await openApps(started.apps);
+    } else if (action === 'continue') {
+      // Continue starts the block this minute, so it is opened like any other Start.
+      const started = await invoke<StartedBlock>('continue_block', { blockId, on, nowUnix, nowMin });
       await openApps(started.apps);
     } else if (action === 'finish') {
       await invoke('finish_block', { blockId, on, nowUnix, nowMin: describeMoment(new Date()).nowMin });
@@ -118,11 +126,18 @@ async function perform(action: BlockActionKind, blockId: string) {
       await invoke('lapse_block', { blockId, on });
     } else if (action === 'reschedule') {
       await invoke('reschedule_block', { blockId, on });
+      raiseNotBefore(on, nowMin);
     } else {
       await invoke('dismiss_block', { blockId });
+      raiseNotBefore(on, nowMin);
     }
-    // Finishing pulls the blocks after it forward, and lapsing, rescheduling or dropping closes
-    // the chain up, so the day is planned again; starting only changes this block.
+    // Rescheduling or giving up a missed block closes the chain up, and the blocks behind it would
+    // then be planned for a time that has already gone, so nothing unstarted may begin before now.
+    // That is noted only after the backend agreed, so a refusal changes nothing.
+    //
+    // Finishing pulls the blocks after it forward, continuing pushes them back, and lapsing,
+    // rescheduling or dropping closes the chain up, so the day is planned again; starting only
+    // changes this block.
     if (action !== 'start') await refreshDay();
     // A rescheduled block is waiting for the user to say what it follows, so show where.
     if (action === 'reschedule') onNeedsPlace();

@@ -131,9 +131,10 @@ describe('buildTimeline: finishing early', () => {
     expect(entry(buildTimeline(early, [school, dinner]), 'b')).toMatchObject({ fits: true, startMin: 960, endMin: 1050 });
   });
 
-  it('never pushes later blocks back, even if a block is somehow recorded as ending late', () => {
+  it('pushes later blocks back when a block was finished late, because the plan follows what happened', () => {
     const t = buildTimeline([blk('a', 30, after('cue', 'school'), { endedAtMin: 1000 }), blk('b', 30, after('block', 'a'))], [school, dinner]);
-    expect(entry(t, 'b')!.startMin).toBe(930);
+    expect(entry(t, 'a')).toMatchObject({ startMin: 900, endMin: 1000 });
+    expect(entry(t, 'b')!.startMin).toBe(1000);
   });
 
   it('does not let a block end before it began', () => {
@@ -200,7 +201,7 @@ describe('buildTimeline: purity', () => {
   });
 
   it('returns an empty timeline for no blocks', () => {
-    expect(buildTimeline([], [school])).toEqual({ entries: [], unattached: [], invalid: [] });
+    expect(buildTimeline([], [school])).toEqual({ entries: [], breaks: [], unattached: [], invalid: [] });
   });
 });
 
@@ -245,5 +246,227 @@ describe('removeFromChains', () => {
   it('does not hang when removed blocks follow each other in a loop', () => {
     const blocks = [blk('a', 30, after('block', 'b')), blk('b', 30, after('block', 'a')), blk('c', 30, after('block', 'a'))];
     expect(() => removeFromChains(blocks, ['a', 'b'])).not.toThrow();
+  });
+});
+
+describe('buildTimeline: recharge breaks', () => {
+  const typed = (id: string, durationMin: number, parent: NodeRef | null, blockType: TimelineBlock['blockType'], over: Partial<TimelineBlock> = {}) =>
+    blk(id, durationMin, parent, { blockType, ...over });
+
+  it('leaves room for a break between two deep blocks and tags it', () => {
+    const t = buildTimeline(
+      [typed('a', 50, after('cue', 'school'), 'deep'), typed('b', 50, after('block', 'a'), 'deep')],
+      [school, dinner],
+    );
+    expect(t.breaks).toEqual([{ afterBlockId: 'a', cueId: 'school', startMin: 950, endMin: 960 }]);
+    expect(entry(t, 'a')).toMatchObject({ startMin: 900, endMin: 950 });
+    expect(entry(t, 'b')).toMatchObject({ startMin: 960, endMin: 1010, fits: true });
+  });
+
+  it('puts a long break after deep work and a short one after routine work', () => {
+    const t = buildTimeline(
+      [
+        typed('a', 50, after('cue', 'school'), 'deep'),
+        typed('r', 30, after('block', 'a'), 'routine'),
+        typed('b', 50, after('block', 'r'), 'deep'),
+      ],
+      [school, dinner],
+    );
+    expect(t.breaks.map((x) => [x.afterBlockId, x.endMin - x.startMin])).toEqual([
+      ['a', 10],
+      ['r', 3],
+    ]);
+    expect(entry(t, 'r')!.startMin).toBe(960);
+    expect(entry(t, 'b')!.startMin).toBe(993);
+  });
+
+  it('adds no break when the blocks have no type', () => {
+    const t = buildTimeline([blk('a', 50, after('cue', 'school')), blk('b', 50, after('block', 'a'))], [school, dinner]);
+    expect(t.breaks).toEqual([]);
+    expect(entry(t, 'b')!.startMin).toBe(950);
+  });
+
+  it('adds no break after the last block, or next to a rest block', () => {
+    const last = buildTimeline([typed('a', 50, after('cue', 'school'), 'deep')], [school, dinner]);
+    expect(last.breaks).toEqual([]);
+    const beforeRest = buildTimeline(
+      [typed('a', 50, after('cue', 'school'), 'deep'), typed('rest', 60, after('block', 'a'), 'recharge')],
+      [school, dinner],
+    );
+    expect(beforeRest.breaks).toEqual([]);
+    expect(entry(beforeRest, 'rest')!.startMin).toBe(950);
+  });
+
+  it('drops a break that would push the next block past the next cue', () => {
+    // 15:00 to 18:00 is 180 minutes. 50 + 130 fills it exactly, so a 10 minute break cannot fit.
+    const t = buildTimeline(
+      [typed('a', 50, after('cue', 'school'), 'deep'), typed('b', 130, after('block', 'a'), 'deep')],
+      [school, dinner],
+    );
+    expect(t.breaks).toEqual([]);
+    expect(entry(t, 'b')).toMatchObject({ startMin: 950, endMin: 1080, fits: true });
+  });
+
+  it('starts the break when the block was actually finished', () => {
+    const t = buildTimeline(
+      [typed('a', 50, after('cue', 'school'), 'deep', { endedAtMin: 930 }), typed('b', 50, after('block', 'a'), 'deep')],
+      [school, dinner],
+    );
+    expect(t.breaks).toEqual([{ afterBlockId: 'a', cueId: 'school', startMin: 930, endMin: 940 }]);
+    expect(entry(t, 'b')!.startMin).toBe(940);
+  });
+});
+
+describe('buildTimeline: following what actually happened', () => {
+  const typed = (id: string, durationMin: number, parent: NodeRef | null, blockType: TimelineBlock['blockType'], over: Partial<TimelineBlock> = {}) =>
+    blk(id, durationMin, parent, { blockType, ...over });
+
+  it('lets a running block that is past its end keep the time, pushing the blocks behind it', () => {
+    // a started at 15:00 for 45 minutes; it is 16:10 and it is still going
+    const t = buildTimeline(
+      [blk('a', 45, after('cue', 'school'), { startedAtMin: 900 }), blk('b', 30, after('block', 'a'))],
+      [school, dinner],
+      { nowMin: 970 },
+    );
+    expect(entry(t, 'a')).toMatchObject({ startMin: 900, endMin: 970 });
+    expect(entry(t, 'b')).toMatchObject({ startMin: 970, endMin: 1000 });
+  });
+
+  it('ends a running block at its planned end while there is time left on it', () => {
+    const t = buildTimeline(
+      [blk('a', 45, after('cue', 'school'), { startedAtMin: 900 }), blk('b', 30, after('block', 'a'))],
+      [school, dinner],
+      { nowMin: 920 },
+    );
+    expect(entry(t, 'b')!.startMin).toBe(945);
+  });
+
+  it('uses the planned end when it is not told the time', () => {
+    const t = buildTimeline(
+      [blk('a', 45, after('cue', 'school'), { startedAtMin: 900 }), blk('b', 30, after('block', 'a'))],
+      [school, dinner],
+    );
+    expect(entry(t, 'b')!.startMin).toBe(945);
+  });
+
+  it('begins a block when it was really started, even if that was later than planned', () => {
+    const t = buildTimeline(
+      [blk('a', 45, after('cue', 'school'), { startedAtMin: 920 }), blk('b', 30, after('block', 'a'))],
+      [school, dinner],
+      { nowMin: 930 },
+    );
+    expect(entry(t, 'a')).toMatchObject({ startMin: 920, endMin: 965 });
+    expect(entry(t, 'b')!.startMin).toBe(965);
+  });
+
+  it('never calls a block that has started "not fitting", but the blocks behind it give way', () => {
+    // it is 18:20, a started at 15:00 and is still running past the 18:00 cue
+    const t = buildTimeline(
+      [blk('a', 60, after('cue', 'school'), { startedAtMin: 900 }), blk('b', 30, after('block', 'a'))],
+      [school, dinner],
+      { nowMin: 1100 },
+    );
+    expect(entry(t, 'a')).toMatchObject({ fits: true, endMin: 1100 });
+    expect(entry(t, 'b')).toMatchObject({ fits: false, startMin: 1100 });
+  });
+
+  it('lifts a block that has not started to the "not before" time', () => {
+    const t = buildTimeline(
+      [blk('a', 30, after('cue', 'school')), blk('b', 30, after('block', 'a'))],
+      [school, dinner],
+      { notBeforeMin: 960 },
+    );
+    expect(entry(t, 'a')).toMatchObject({ startMin: 960, endMin: 990 });
+    expect(entry(t, 'b')!.startMin).toBe(990);
+  });
+
+  it('leaves a block alone when "not before" is earlier than it would start anyway', () => {
+    const t = buildTimeline([blk('a', 30, after('cue', 'school'))], [school, dinner], { notBeforeMin: 600 });
+    expect(entry(t, 'a')!.startMin).toBe(900);
+  });
+
+  it('does not move a block that has started or finished because of "not before"', () => {
+    const started = buildTimeline([blk('a', 30, after('cue', 'school'), { startedAtMin: 900 })], [school, dinner], { notBeforeMin: 960, nowMin: 910 });
+    expect(entry(started, 'a')!.startMin).toBe(900);
+    const finished = buildTimeline([blk('a', 30, after('cue', 'school'), { startedAtMin: 900, endedAtMin: 925 })], [school, dinner], { notBeforeMin: 960 });
+    expect(entry(finished, 'a')).toMatchObject({ startMin: 900, endMin: 925 });
+  });
+
+  it('starts the break after a running block when that block really ends', () => {
+    const t = buildTimeline(
+      [typed('a', 45, after('cue', 'school'), 'deep', { startedAtMin: 900 }), typed('b', 45, after('block', 'a'), 'deep')],
+      [school, dinner],
+      { nowMin: 970 },
+    );
+    expect(t.breaks).toEqual([{ afterBlockId: 'a', cueId: 'school', startMin: 970, endMin: 979 }]);
+    expect(entry(t, 'b')!.startMin).toBe(979);
+  });
+
+  it('adds no break in front of a block that has already started', () => {
+    const t = buildTimeline(
+      [typed('a', 45, after('cue', 'school'), 'deep', { startedAtMin: 900, endedAtMin: 940 }), typed('b', 45, after('block', 'a'), 'deep', { startedAtMin: 941 })],
+      [school, dinner],
+    );
+    expect(t.breaks).toEqual([]);
+    expect(entry(t, 'b')!.startMin).toBe(941);
+  });
+});
+
+describe('buildTimeline: shortening everything', () => {
+  const typed = (id: string, durationMin: number, parent: NodeRef | null, blockType: TimelineBlock['blockType'], over: Partial<TimelineBlock> = {}) =>
+    blk(id, durationMin, parent, { blockType, ...over });
+
+  it('shortens every block that has not started, and the break between them, by the same share', () => {
+    const t = buildTimeline(
+      [typed('a', 50, after('cue', 'school'), 'deep'), typed('b', 50, after('block', 'a'), 'deep')],
+      [school, dinner],
+      { scale: 0.8 },
+    );
+    // 50 -> 40 minutes each; the 10 minute break becomes 8
+    expect(entry(t, 'a')).toMatchObject({ startMin: 900, endMin: 940 });
+    expect(t.breaks).toEqual([{ afterBlockId: 'a', cueId: 'school', startMin: 940, endMin: 948 }]);
+    expect(entry(t, 'b')).toMatchObject({ startMin: 948, endMin: 988 });
+  });
+
+  it('can make a day fit that did not', () => {
+    const blocks = [blk('a', 100, after('cue', 'school')), blk('b', 100, after('block', 'a'))]; // 200 > 180 minutes
+    expect(entry(buildTimeline(blocks, [school, dinner]), 'b')!.fits).toBe(false);
+    expect(entry(buildTimeline(blocks, [school, dinner], { scale: 0.9 }), 'b')).toMatchObject({ fits: true, endMin: 1080 });
+  });
+
+  it('leaves a block that has started or finished at the length it really had', () => {
+    const t = buildTimeline(
+      [blk('a', 60, after('cue', 'school'), { startedAtMin: 900, endedAtMin: 960 }), blk('b', 60, after('block', 'a'))],
+      [school, dinner],
+      { scale: 0.5 },
+    );
+    expect(entry(t, 'a')).toMatchObject({ startMin: 900, endMin: 960 });
+    expect(entry(t, 'b')).toMatchObject({ startMin: 960, endMin: 990 });
+  });
+
+  it('never shortens a block to less than a minute', () => {
+    const t = buildTimeline([blk('a', 1, after('cue', 'school'))], [school, dinner], { scale: 0.1 });
+    expect(entry(t, 'a')).toMatchObject({ startMin: 900, endMin: 901 });
+  });
+
+  it('does nothing when the scale is 1 or not given', () => {
+    const blocks = [blk('a', 50, after('cue', 'school'))];
+    expect(buildTimeline(blocks, [school, dinner], { scale: 1 })).toEqual(buildTimeline(blocks, [school, dinner]));
+  });
+});
+
+describe('buildTimeline: keeping breaks', () => {
+  const deep = (id: string, durationMin: number, parent: NodeRef) => blk(id, durationMin, parent, { blockType: 'deep' });
+
+  it('drops a break that would push the next block past the cue, by default', () => {
+    const t = buildTimeline([deep('a', 90, after('cue', 'school')), deep('b', 90, after('block', 'a'))], [school, dinner]);
+    expect(t.breaks).toEqual([]);
+    expect(entry(t, 'b')!.fits).toBe(true); // 90 + 90 = 180, exactly the time there is
+  });
+
+  it('can keep the break anyway, so the block after it shows as not fitting', () => {
+    const t = buildTimeline([deep('a', 90, after('cue', 'school')), deep('b', 90, after('block', 'a'))], [school, dinner], { keepBreaks: true });
+    expect(t.breaks).toHaveLength(1);
+    expect(entry(t, 'b')!.fits).toBe(false);
   });
 });

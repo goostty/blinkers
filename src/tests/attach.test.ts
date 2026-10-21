@@ -118,6 +118,21 @@ describe('resolveAttach', () => {
     expect(resolveAttach('neither', '')).toEqual({ ok: true, value: null });
     expect(resolveAttach('neither', 'cue:abc')).toEqual({ ok: true, value: null });
   });
+
+  describe('when the app places blocks itself', () => {
+    it('lets a block be made with no place, because the app will place it', () => {
+      expect(resolveAttach('important', '', true)).toEqual({ ok: true, value: null });
+      expect(resolveAttach(null, '', true)).toEqual({ ok: true, value: null });
+    });
+
+    it('still honours a place the user picked', () => {
+      expect(resolveAttach('important', 'cue:abc', true)).toEqual({ ok: true, value: { kind: 'cue', id: 'abc' } });
+    });
+
+    it('still refuses a choice that is not a cue or a block', () => {
+      expect(resolveAttach('important', 'moon:x', true).ok).toBe(false);
+    });
+  });
 });
 
 describe('resolveDuration', () => {

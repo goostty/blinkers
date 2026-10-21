@@ -60,11 +60,14 @@ export function parseAttach(value: string): ParentChoice | null {
   return { kind, id };
 }
 
-// Every block has to say what it follows, because nothing is scheduled by guessing. The one
-// exception is a block advised to drop (Q4): it is not part of the day, so a choice picked before
-// switching to Q4 is ignored rather than sent.
-export function resolveAttach(urgency: Urgency | null, picked: string): Result<ParentChoice | null> {
+// Without automatic placement every block has to say what it follows, because nothing is
+// scheduled by guessing. With it the choice is optional: a block with no place is made anyway and
+// the app places it. Either way a block advised to drop (Q4) is not part of the day, so a choice
+// picked before switching to Q4 is ignored rather than sent, and a choice that is neither a cue
+// nor a block is refused, not quietly turned into "no place".
+export function resolveAttach(urgency: Urgency | null, picked: string, auto = false): Result<ParentChoice | null> {
   if (urgency === 'neither') return { ok: true, value: null };
+  if (auto && picked === '') return { ok: true, value: null };
   const parent = parseAttach(picked);
   if (!parent) return { ok: false, error: 'Pick what this block follows.' };
   return { ok: true, value: parent };

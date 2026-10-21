@@ -159,6 +159,11 @@ pub async fn start_block_in(
         }
     }
 
+    started_block(pool, block_id).await
+}
+
+// What the UI needs once a block has begun: its title, first step and the apps to open.
+async fn started_block(pool: &sqlx::SqlitePool, block_id: &str) -> Result<StartedBlock, String> {
     let details = sqlx::query_as::<_, BlockDetails>(
         "SELECT task_title, action_trigger, definition_of_done, apps FROM containers WHERE focus_block_id = $1",
     )
@@ -174,6 +179,62 @@ pub async fn start_block_in(
         definition_of_done: details.definition_of_done,
         apps: apps_from_json(details.apps.as_deref()),
     })
+}
+
+// Continue is what a missed block gets when the user decides to do it after all: it starts right
+// now. The commitment becomes a `started` one whose start is this moment (both the real time and
+// the minute of the day), so it is a fact like any other started block and the blocks behind it
+// are laid out from here. Only a missed block can be continued, and one that was dropped cannot.
+// Continuing twice succeeds again and keeps the first start, as Start does.
+pub async fn continue_block_in(
+    pool: &sqlx::SqlitePool,
+    block_id: &str,
+    on: &str,
+    now_unix: i64,
+    now_min: i32,
+) -> Result<StartedBlock, String> {
+    validate_created_on(on)?;
+    if !(0..MINUTES_PER_DAY).contains(&now_min) {
+        return Err(format!("Minute {now_min} is outside the day."));
+    }
+
+    let dropped: Option<bool> = sqlx::query_scalar("SELECT dismissed FROM focus_blocks WHERE id = $1")
+        .bind(block_id)
+        .fetch_optional(pool)
+        .await
+        .map_err(|e| e.to_string())?;
+    if dropped == Some(true) {
+        return Err("That block was dropped.".into());
+    }
+
+    let moved = sqlx::query(
+        "UPDATE commitments SET status = 'started', started_at = $3, start_min = $4
+         WHERE block_id = $1 AND on_date = $2 AND status = 'missed'",
+    )
+    .bind(block_id)
+    .bind(on)
+    .bind(now_unix)
+    .bind(now_min)
+    .execute(pool)
+    .await
+    .map_err(|e| e.to_string())?;
+
+    if moved.rows_affected() == 0 {
+        let status: Option<String> =
+            sqlx::query_scalar("SELECT status FROM commitments WHERE block_id = $1 AND on_date = $2")
+                .bind(block_id)
+                .bind(on)
+                .fetch_optional(pool)
+                .await
+                .map_err(|e| e.to_string())?;
+        match status.as_deref() {
+            Some("started") => {}
+            Some(_) => return Err("Only a missed block can be continued.".into()),
+            None => return Err("No reminder is scheduled for that block today.".into()),
+        }
+    }
+
+    started_block(pool, block_id).await
 }
 
 #[derive(Debug, sqlx::FromRow)]
@@ -302,6 +363,18 @@ pub async fn start_block(
     db_state: State<'_, DbState>,
 ) -> Result<StartedBlock, String> {
     start_block_in(&db_state.pool, &block_id, &on, now_unix).await
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[tauri::command]
+pub async fn continue_block(
+    block_id: String,
+    on: String,
+    now_unix: i64,
+    now_min: i32,
+    db_state: State<'_, DbState>,
+) -> Result<StartedBlock, String> {
+    continue_block_in(&db_state.pool, &block_id, &on, now_unix, now_min).await
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -618,6 +691,80 @@ mod tests {
         assert!(start_block_in(&pool, "no-such-block", DAY, START).await.is_err());
         assert!(start_block_in(&pool, &a, "bad", START).await.is_err());
         assert_eq!(one(&pool, &a).await.started_at, None); // nothing was recorded
+    }
+
+    // ----- continuing a missed block -----
+
+    #[tokio::test]
+    async fn continuing_a_missed_block_starts_it_at_that_moment() {
+        let pool = pool().await;
+        let apps = vec![AppEntry { label: "Docs".into(), url: "https://example.com".into(), icon: None }];
+        let a = make(&pool, "write", 30, None, apps.clone()).await;
+        sync_commitments_in(&pool, DAY, vec![plan(&a, "cue1", 600)]).await.unwrap();
+        set_status(&pool, &a, "missed").await;
+
+        let started = continue_block_in(&pool, &a, DAY, START, 725).await.unwrap();
+
+        assert_eq!(started, StartedBlock { title: "write".into(), action_trigger: Some("open write".into()), definition_of_done: Some("write done".into()), apps });
+        let c = one(&pool, &a).await;
+        // it now counts as started at the moment it was continued, not at the time it was planned for
+        assert_eq!((c.status.as_str(), c.started_at, c.start_min), ("started", Some(START), 725));
+    }
+
+    #[tokio::test]
+    async fn only_a_missed_block_can_be_continued_and_a_refusal_changes_nothing() {
+        let pool = pool().await;
+        let (a, never) = (block(&pool, "a").await, block(&pool, "never").await);
+        sync_commitments_in(&pool, DAY, vec![plan(&a, "cue1", 600)]).await.unwrap();
+
+        for status in ["planned", "nagging", "lapsed", "finished"] {
+            set_status(&pool, &a, status).await;
+            let err = continue_block_in(&pool, &a, DAY, START, 700).await.unwrap_err();
+            assert!(err.contains("Only a missed block"), "{status}: {err}");
+        }
+        assert!(continue_block_in(&pool, &never, DAY, START, 700).await.is_err()); // never scheduled today
+        assert!(continue_block_in(&pool, "no-such-block", DAY, START, 700).await.is_err());
+        let c = one(&pool, &a).await;
+        assert_eq!((c.status.as_str(), c.started_at, c.start_min), ("finished", None, 600));
+    }
+
+    #[tokio::test]
+    async fn a_missed_block_that_was_dropped_cannot_be_continued() {
+        let pool = pool().await;
+        let a = block(&pool, "a").await;
+        sync_commitments_in(&pool, DAY, vec![plan(&a, "cue1", 600)]).await.unwrap();
+        set_status(&pool, &a, "missed").await;
+        dismiss_block_in(&pool, &a).await.unwrap();
+
+        assert!(continue_block_in(&pool, &a, DAY, START, 700).await.unwrap_err().contains("dropped"));
+        assert_eq!(one(&pool, &a).await.status, "missed");
+    }
+
+    #[tokio::test]
+    async fn a_minute_outside_the_day_or_a_bad_date_is_refused() {
+        let pool = pool().await;
+        let a = block(&pool, "a").await;
+        sync_commitments_in(&pool, DAY, vec![plan(&a, "cue1", 600)]).await.unwrap();
+        set_status(&pool, &a, "missed").await;
+
+        for bad in [-1, 1440, 5000] {
+            assert!(continue_block_in(&pool, &a, DAY, START, bad).await.is_err(), "{bad}");
+        }
+        assert!(continue_block_in(&pool, &a, "bad", START, 700).await.is_err());
+        assert_eq!(one(&pool, &a).await.status, "missed");
+    }
+
+    #[tokio::test]
+    async fn continuing_twice_succeeds_again_and_keeps_the_first_start() {
+        let pool = pool().await;
+        let a = block(&pool, "a").await;
+        sync_commitments_in(&pool, DAY, vec![plan(&a, "cue1", 600)]).await.unwrap();
+        set_status(&pool, &a, "missed").await;
+
+        let first = continue_block_in(&pool, &a, DAY, START, 700).await.unwrap();
+        assert_eq!(continue_block_in(&pool, &a, DAY, START + 500, 710).await.unwrap(), first);
+        let c = one(&pool, &a).await;
+        assert_eq!((c.started_at, c.start_min), (Some(START), 700));
     }
 
     #[tokio::test]

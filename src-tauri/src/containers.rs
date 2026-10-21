@@ -224,8 +224,9 @@ fn validate_parent_kind(parent: &ParentRef) -> Result<(), String> {
     }
 }
 
-// A block advised to drop (Q4) is not placed in the day, so it has no parent. Everything else
-// has to say what it follows: nothing is scheduled by guessing.
+// A block advised to drop (Q4) is not placed in the day, so it must not be attached. Any other
+// block may be made with or without a place: the app places it (and one without a place simply
+// waits on today's list until there is room), so the user never has to say what it follows.
 fn validate_new_block(b: &NewBlock) -> Result<(), String> {
     validate_block_type(&b.block_type)?;
     validate_urgency(&b.block_type, b.urgency.as_deref())?;
@@ -233,7 +234,7 @@ fn validate_new_block(b: &NewBlock) -> Result<(), String> {
     validate_created_on(&b.created_on)?;
     match (&b.parent, b.urgency.as_deref() == Some("neither")) {
         (Some(_), true) => Err("A block you are advised to drop is not placed in the day.".into()),
-        (None, false) => Err("Pick what this block follows.".into()),
+        (None, false) => Ok(()),
         (Some(parent), false) => validate_parent_kind(parent),
         (None, true) => Ok(()),
     }
@@ -1008,11 +1009,18 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn every_block_has_to_say_what_it_follows_except_one_advised_to_drop() {
+    async fn a_block_can_be_made_without_a_place_and_waits_to_be_placed() {
         let pool = pool().await;
-        assert!(create(&pool, "x", "deep", Some("important"), None, MON).await.is_err());
-        assert!(create(&pool, "x", "reset", None, None, MON).await.is_err());
-        // A block advised to drop is not placed in the day, so it must not be attached.
+        // Placing blocks is the app's job now, so a block may be made before it has a place. It is
+        // on today's list with nothing to follow, which is how the app knows to place it.
+        let waiting = create(&pool, "x", "deep", Some("important"), None, MON).await.unwrap();
+        let rest = create(&pool, "y", "reset", None, None, MON).await.unwrap();
+        let listed = day(&pool, MON).await;
+        for id in [&waiting, &rest] {
+            let b = listed.iter().find(|b| &b.id == id).unwrap();
+            assert_eq!((b.parent_kind.as_deref(), b.parent_id.as_deref()), (None, None));
+        }
+        // A block advised to drop is not placed in the day, so it must still not be attached.
         let cue = fresh_cue(&pool).await;
         assert!(create(&pool, "x", "deep", Some("neither"), Some(cue_ref(&cue)), MON).await.is_err());
         assert!(create(&pool, "x", "deep", Some("neither"), None, MON).await.is_ok());

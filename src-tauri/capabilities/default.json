@@ -9,9 +9,11 @@
     "core:default",
     "opener:default",
     "core:window:allow-set-size",
+    "core:window:allow-destroy",
     "core:window:allow-start-dragging",
     "sql:default",
     "store:default",
+    "dialog:allow-open",
     {
       "identifier": "opener:allow-open-url",
       "allow": [

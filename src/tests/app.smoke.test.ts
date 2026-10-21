@@ -9,12 +9,14 @@ import indexHtml from '../../index.html?raw';
 type Call = { cmd: string; args: Record<string, unknown> };
 type Handler = (args: Record<string, unknown>) => unknown;
 
+const SYNC_OFF = { enabled: false, folder: null, deviceId: 'me', lastSyncedAt: null, remote: null, state: 'off' };
 const MORNING = { id: 'morning', label: 'Morning', timeMin: 480, days: [0, 1, 2, 3, 4, 5, 6], flexMin: 0, endsDay: false };
 
 let calls: Call[];
 let handlers: Record<string, Handler>;
 let errors: unknown[][];
 let timers: ReturnType<typeof setInterval>[] = [];
+let realPlacementDefault = false; // a test of the real default setting turns this on
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 const click = (el: Element) => el.dispatchEvent(new MouseEvent('click', { bubbles: true }));
@@ -22,9 +24,10 @@ const settle = (ms = 30) => new Promise((resolve) => setTimeout(resolve, ms));
 const called = (cmd: string) => calls.filter((c) => c.cmd === cmd);
 
 // Waits for something the app does in the background, instead of guessing how long it takes.
+// It counts its waits instead of reading the clock, because a test that pins the clock would
+// otherwise never reach the deadline.
 async function until(done: () => boolean, ms = 1500) {
-  const end = Date.now() + ms;
-  while (!done() && Date.now() < end) await settle(10);
+  for (let waited = 0; !done() && waited < ms; waited += 10) await settle(10);
 }
 
 function type(el: HTMLInputElement, value: string) {
@@ -55,6 +58,11 @@ async function startApp(overrides: Record<string, Handler> = {}) {
     get_next_order_index: () => 0,
     create_container: () => 'new-block-id',
     set_profile: () => null,
+    get_sync_status: () => SYNC_OFF,
+    run_sync: () => ({ kind: 'off' }),
+    set_sync_folder: () => SYNC_OFF,
+    get_synced_setting: () => null,
+    set_synced_setting: () => null,
     create_cue: () => null,
     update_cue: () => null,
     delete_cue: () => null,
@@ -87,6 +95,10 @@ async function startApp(overrides: Record<string, Handler> = {}) {
     },
   });
 
+  // Most tests are about what the user does by hand, so placing blocks automatically is off unless
+  // a test turns it on; the tests of the automatic placement do.
+  if (!realPlacementDefault && localStorage.getItem('blinkers.autoplace') === null) localStorage.setItem('blinkers.autoplace', 'off');
+
   document.body.innerHTML = new DOMParser().parseFromString(indexHtml, 'text/html').body.innerHTML;
   vi.resetModules();
   await import('../main');
@@ -102,6 +114,8 @@ afterEach(() => {
   timers = [];
   vi.restoreAllMocks();
   document.body.innerHTML = '';
+  localStorage.clear();
+  realPlacementDefault = false;
 });
 
 describe('starting the app', () => {
@@ -269,13 +283,18 @@ describe('making a block', () => {
     expect($<HTMLInputElement>('task-title').required).toBe(true);
   });
 
-  it('suggests a buffer for deep work only', async () => {
+  it('asks for about 1.5 times the estimate on work, and not on rest', async () => {
     await startApp();
     expect($('duration-hint').textContent).toMatch(/overestimate/i);
+    expect($('duration-hint').textContent).toContain('1.5');
     click($('routine-block'));
+    expect($('duration-hint').textContent).toMatch(/overestimate/i);
+    expect($('duration-hint').textContent).toContain('1.5');
+    click($('reset-block'));
     expect($('duration-hint').textContent).not.toMatch(/overestimate/i);
     click($('recharge-block'));
     expect($('duration-hint').textContent).toMatch(/resting/i);
+    expect($('duration-hint').textContent).not.toMatch(/overestimate/i);
   });
 });
 
@@ -583,12 +602,16 @@ describe('starting, finishing and lapsing a block', () => {
       blockList = [block];
     });
 
-    it('is offered Reschedule and Drop, with when it was missed, and no Start', async () => {
+    afterEach(() => localStorage.clear());
+
+    it('is offered Continue, Reschedule and Abandon, with when it was missed, and no Start', async () => {
       await startApp(missedBackend());
       await until(() => !strip().hidden);
 
       expect(strip().textContent).toContain('Write report');
       expect(strip().textContent).toContain('Missed 10:00 AM');
+      expect(button('continue')).not.toBeNull();
+      expect(button('drop')!.textContent).toBe('Abandon');
       expect(button('reschedule')).not.toBeNull();
       expect(button('drop')).not.toBeNull();
       expect(button('start')).toBeNull();
@@ -621,6 +644,70 @@ describe('starting, finishing and lapsing a block', () => {
 
       expect(called('dismiss_block')[0].args).toMatchObject({ blockId: 'b1' });
       expect(strip().hidden).toBe(true);
+    });
+
+    it('Continue starts the block right now, opens its apps, and plans the day again around it', async () => {
+      await startApp(
+        missedBackend({
+          continue_block: () => {
+            live = [{ ...missed, status: 'started', startedAt: nowUnix() }];
+            return { title: 'Write report', actionTrigger: null, definitionOfDone: null, apps: [{ label: 'Docs', url: 'https://example.com' }] };
+          },
+        }),
+      );
+      await until(() => !strip().hidden);
+      const plansBefore = called('sync_commitments').length;
+
+      click(button('continue')!);
+      await until(() => button('finish') !== null);
+
+      expect(called('continue_block')[0].args).toMatchObject({ blockId: 'b1' });
+      expect(typeof called('continue_block')[0].args.nowUnix).toBe('number');
+      expect(typeof called('continue_block')[0].args.nowMin).toBe('number');
+      expect(called('sync_commitments').length).toBeGreaterThan(plansBefore);
+      expect(button('continue')).toBeNull(); // it is a started block now
+    });
+
+    it('Abandon notes the time, so nothing is planned before it', async () => {
+      await startApp(missedBackend());
+      await until(() => !strip().hidden);
+
+      click(button('drop')!);
+      await until(() => strip().hidden);
+
+      const stored = JSON.parse(localStorage.getItem('blinkers.day')!);
+      expect(Math.abs(stored.notBeforeMin - nowMin())).toBeLessThanOrEqual(1);
+    });
+
+    it('Reschedule notes the time too, because it also frees the slot', async () => {
+      await startApp(missedBackend());
+      await until(() => !strip().hidden);
+
+      click(button('reschedule')!);
+      await until(() => strip().hidden);
+
+      expect(JSON.parse(localStorage.getItem('blinkers.day')!).notBeforeMin).toBeGreaterThan(0);
+    });
+
+    it('does not note the time when Abandon is refused', async () => {
+      await startApp(missedBackend({ dismiss_block: () => Promise.reject('That block no longer exists.') }));
+      await until(() => !strip().hidden);
+
+      click(button('drop')!);
+      await settle(80);
+
+      expect(localStorage.getItem('blinkers.day')).toBeNull();
+    });
+
+    it('shows the backend\'s refusal to Continue and keeps the block', async () => {
+      await startApp(missedBackend({ continue_block: () => Promise.reject('Only a missed block can be continued.') }));
+      await until(() => !strip().hidden);
+
+      click(button('continue')!);
+      await settle(80);
+
+      expect(strip().textContent).toContain('Only a missed block can be continued.');
+      expect(button('continue')).not.toBeNull();
     });
 
     it('shows the backend\'s refusal and keeps the block', async () => {
@@ -707,6 +794,670 @@ describe('phone reminders', () => {
     await settle(50);
     expect(called('set_ntfy_topic')[1].args).toMatchObject({ topic: 'my_topic' });
     expect($('ntfy-error').hidden).toBe(true);
+  });
+});
+
+describe('the suggested place', () => {
+  const NOON = { id: 'noon', label: 'Noon', timeMin: 720, days: [0, 1, 2, 3, 4, 5, 6], flexMin: 0, endsDay: false };
+  const at = (hour: number) => vi.setSystemTime(new Date(2026, 9, 19, hour, 0)); // a Monday
+  const pickUrgency = (value: string) => click(document.querySelector(`[data-urgency="${value}"]`)!);
+  const select = () => $<HTMLSelectElement>('block-attach');
+
+  function describeBlock(title: string, length = '45') {
+    type($('task-title'), title);
+    type($('block-duration'), length);
+  }
+
+  afterEach(() => vi.useRealTimers());
+
+  it('pre-selects the best place and says why', async () => {
+    at(6);
+    await startApp();
+    describeBlock('Write report');
+    pickUrgency('urgent-important');
+    await settle();
+
+    expect(select().value).toBe('cue:morning');
+    expect($('attach-suggestion').hidden).toBe(false);
+    expect($('attach-suggestion').textContent).toContain('8:00 AM');
+  });
+
+  it('waits until the block has been ranked', async () => {
+    at(6);
+    await startApp();
+    describeBlock('Write report');
+    await settle();
+
+    expect(select().value).toBe('');
+    expect($('attach-suggestion').hidden).toBe(true);
+  });
+
+  it('leaves a place the user chose alone when the name or length changes afterwards', async () => {
+    at(6);
+    await startApp({ list_cues: () => [MORNING, NOON] });
+    describeBlock('Write report');
+    pickUrgency('urgent-important');
+    await settle();
+    expect(select().value).toBe('cue:morning');
+
+    select().value = 'cue:noon';
+    select().dispatchEvent(new Event('change', { bubbles: true }));
+    describeBlock('Write the report');
+    await settle();
+
+    expect(select().value).toBe('cue:noon');
+  });
+
+  it('says tomorrow, and picks nothing, when the time the name asks for has passed', async () => {
+    at(14);
+    await startApp();
+    click($('routine-block'));
+    describeBlock('Morning routine', '30');
+    pickUrgency('important');
+    await settle();
+
+    expect(select().value).toBe('');
+    expect($('attach-suggestion').textContent).toMatch(/tomorrow/i);
+  });
+
+  it('has no suggestion for a block advised to drop', async () => {
+    at(6);
+    await startApp();
+    describeBlock('Write report');
+    pickUrgency('urgent-important');
+    await settle();
+    pickUrgency('neither');
+    await settle();
+
+    expect($('attach-suggestion').hidden).toBe(true);
+  });
+
+  it('pre-selects the place for a block waiting in the queue', async () => {
+    at(6);
+    const carriedOver = {
+      id: 'old', blockType: 'deep', orderIndex: 0, title: 'Left over', urgency: 'urgent-important',
+      createdOn: '2000-01-01', durationMin: 60, parentKind: null, parentId: null,
+      isCompleted: false, endedAtMin: null, committed: false,
+    };
+    await startApp({ list_day_blocks: () => [carriedOver] });
+
+    expect($('unattached-list').querySelector('select')!.value).toBe('cue:morning');
+  });
+});
+
+describe('the day follows the clock and the choices the user made', () => {
+  const NOON = { id: 'noon', label: 'Noon', timeMin: 720, days: [0, 1, 2, 3, 4, 5, 6], flexMin: 0, endsDay: false };
+  const unix = (hour: number, minute = 0) => Math.floor(new Date(2026, 9, 19, hour, minute).getTime() / 1000); // a Monday
+  const mk = (id: string, over: Record<string, unknown> = {}) => ({
+    id, blockType: 'deep', orderIndex: 0, title: id, urgency: 'important', createdOn: '2026-10-19',
+    durationMin: 60, parentKind: 'cue', parentId: 'morning', isCompleted: false, endedAtMin: null, committed: false,
+    ...over,
+  });
+  const lastPlan = () => {
+    const plans = called('sync_commitments');
+    return plans[plans.length - 1].args.plan as Array<{ blockId: string; startMin: number; durationMin: number }>;
+  };
+  const planOf = (id: string) => lastPlan().find((p) => p.blockId === id);
+
+  afterEach(() => {
+    vi.useRealTimers();
+    localStorage.clear();
+  });
+
+  it('lets a block that is still running past its end push the next one later', async () => {
+    vi.setSystemTime(new Date(2026, 9, 19, 10, 0));
+    const blocks = [mk('write', { committed: true }), mk('email', { parentKind: 'block', parentId: 'write', durationMin: 30 })];
+    await startApp({
+      list_day_blocks: () => blocks,
+      // write began at 08:00 for 60 minutes and it is now 10:00
+      list_commitments: () => [{ blockId: 'write', status: 'started', startMin: 480, durationMin: 60, startedAt: unix(8) }],
+    });
+
+    // write ends now (10:00); being deep work it earns a 12 minute break before email
+    expect(planOf('email')!.startMin).toBe(10 * 60 + 12);
+  });
+
+  it('re-plans on the timer only while a started block is past its end', async () => {
+    vi.setSystemTime(new Date(2026, 9, 19, 10, 0));
+    const running = { blockId: 'write', status: 'started', startMin: 480, durationMin: 60, startedAt: unix(8) };
+    let commitments: unknown[] = [running];
+    await startApp({ list_day_blocks: () => [mk('write', { committed: true })], list_commitments: () => commitments });
+    const { replanIfOverrunning } = await import('../scheduleUi');
+
+    const before = called('sync_commitments').length;
+    await replanIfOverrunning();
+    expect(called('sync_commitments').length).toBe(before + 1); // overdue, so the day is planned again
+
+    commitments = [{ ...running, startedAt: unix(9, 50) }]; // started ten minutes ago: not overdue
+    await (await import('../scheduleUi')).refreshDay();
+    const quiet = called('sync_commitments').length;
+    await replanIfOverrunning();
+    expect(called('sync_commitments').length).toBe(quiet);
+  });
+
+  it('shortens everything for now when the day does not fit, and the user has not chosen', async () => {
+    vi.setSystemTime(new Date(2026, 9, 19, 6, 0));
+    const blocks = [
+      mk('a', { urgency: 'urgent', durationMin: 130 }),
+      mk('b', { urgency: 'urgent-important', durationMin: 130, parentKind: 'block', parentId: 'a' }),
+    ];
+    await startApp({ list_cues: () => [MORNING, NOON], list_day_blocks: () => blocks });
+
+    // 08:00 to 12:00 is 240 minutes: 130 + a 20 minute break + 130 only fits 15% shorter
+    expect(planOf('a')!.durationMin).toBe(111);
+    expect(planOf('b')!.startMin + planOf('b')!.durationMin).toBeLessThanOrEqual(720);
+  });
+
+  it('uses the way out the user chose for today', async () => {
+    vi.setSystemTime(new Date(2026, 9, 19, 6, 0));
+    localStorage.setItem('blinkers.day', JSON.stringify({ date: '2026-10-19', fit: 'drop' }));
+    const blocks = [
+      mk('a', { urgency: 'urgent', durationMin: 130 }),
+      mk('b', { urgency: 'urgent-important', durationMin: 130, parentKind: 'block', parentId: 'a' }),
+    ];
+    await startApp({ list_cues: () => [MORNING, NOON], list_day_blocks: () => blocks });
+
+    expect(planOf('a')).toBeUndefined(); // the lowest priority one rolls to tomorrow
+    expect(planOf('b')).toMatchObject({ startMin: 480, durationMin: 130 });
+  });
+
+  it('forgets the choice once the day fits again, so a later problem asks again', async () => {
+    vi.setSystemTime(new Date(2026, 9, 19, 6, 0));
+    localStorage.setItem('blinkers.day', JSON.stringify({ date: '2026-10-19', fit: 'drop' }));
+    await startApp({ list_cues: () => [MORNING, NOON], list_day_blocks: () => [mk('a', { durationMin: 60 })] });
+
+    expect(JSON.parse(localStorage.getItem('blinkers.day')!).fit).toBeUndefined();
+  });
+
+  it('does not start a block before the time the user last dealt with a missed block', async () => {
+    vi.setSystemTime(new Date(2026, 9, 19, 9, 30));
+    localStorage.setItem('blinkers.day', JSON.stringify({ date: '2026-10-19', notBeforeMin: 570 }));
+    await startApp({ list_day_blocks: () => [mk('email', { durationMin: 30 })] });
+
+    expect(planOf('email')!.startMin).toBe(570);
+  });
+});
+
+describe('the app places blocks itself', () => {
+  const unplaced = (id: string, over: Record<string, unknown> = {}) => ({
+    id, blockType: 'deep', orderIndex: 0, title: id, urgency: 'important', createdOn: '2026-10-19',
+    durationMin: 60, parentKind: null, parentId: null, isCompleted: false, endedAtMin: null, committed: false,
+    ...over,
+  });
+  let list: Array<Record<string, unknown>>;
+  // A backend that really moves the block when it is attached, as the real one does.
+  const backend = (extra: Record<string, Handler> = {}) => ({
+    list_day_blocks: () => list,
+    attach_block: (a: Record<string, unknown>) => {
+      const parent = a.parent as { kind: string; id: string };
+      list = list.map((b) => (b.id === a.blockId ? { ...b, parentKind: parent.kind, parentId: parent.id } : b));
+      return null;
+    },
+    ...extra,
+  });
+  const on = () => localStorage.setItem('blinkers.autoplace', 'on');
+
+  beforeEach(() => {
+    vi.setSystemTime(new Date(2026, 9, 19, 6, 0)); // a Monday, with the only cue at 08:00
+    list = [unplaced('w', { title: 'Write report' })];
+  });
+  afterEach(() => vi.useRealTimers());
+
+  it('places a block that has no place, without being asked', async () => {
+    on();
+    await startApp(backend());
+    await until(() => called('attach_block').length > 0);
+
+    expect(called('attach_block')[0].args).toMatchObject({ blockId: 'w', parent: { kind: 'cue', id: 'morning' }, on: '2026-10-19' });
+  });
+
+  it('leaves the "needs a place" list empty once everything is placed', async () => {
+    on();
+    await startApp(backend());
+    await until(() => called('attach_block').length > 0);
+    await settle(80);
+
+    expect($('unattached-section').hidden).toBe(true);
+    expect($('btn-place').hidden).toBe(true);
+  });
+
+  it('places the most urgent block first, so it gets the earliest slot', async () => {
+    on();
+    list = [unplaced('later', { urgency: 'urgent' }), unplaced('first', { urgency: 'urgent-important' })];
+    await startApp(backend());
+    await until(() => called('attach_block').length >= 2);
+
+    expect(called('attach_block')[0].args).toMatchObject({ blockId: 'first', parent: { kind: 'cue', id: 'morning' } });
+    expect(called('attach_block')[1].args).toMatchObject({ blockId: 'later', parent: { kind: 'block', id: 'first' } });
+  });
+
+  it('does nothing by itself when the setting is off', async () => {
+    await startApp(backend()); // off by default in these tests
+    await settle(100);
+
+    expect(called('attach_block')).toHaveLength(0);
+    expect($('unattached-section').hidden).toBe(false);
+  });
+
+  it('keeps a block waiting, and says so, when there is no room for it today', async () => {
+    on();
+    vi.setSystemTime(new Date(2026, 9, 19, 14, 0));
+    list = [unplaced('w', { title: 'Morning routine', blockType: 'routine' })];
+    await startApp(backend());
+    await settle(100);
+
+    expect(called('attach_block')).toHaveLength(0);
+    expect($('unattached-list').textContent).toMatch(/tomorrow/i);
+  });
+
+  it('tries a block once, so a refusal cannot make it loop', async () => {
+    on();
+    await startApp(backend({ attach_block: () => Promise.reject('That block no longer exists.') }));
+    await settle(150);
+
+    expect(called('attach_block')).toHaveLength(1);
+    expect($('unattached-list').textContent).toContain('Write report'); // still waiting
+  });
+
+  it('lets a block be made with no place', async () => {
+    on();
+    list = [];
+    await startApp(backend());
+    type($('task-title'), 'Write report');
+    type($('block-duration'), '45');
+    click(document.querySelector('[data-urgency="important"]')!);
+    await settle();
+    $<HTMLSelectElement>('block-attach').value = '';
+    submitBlockForm();
+    await settle();
+
+    expect(called('create_container')[0].args).toMatchObject({ parent: null, urgency: 'important', durationMin: 45 });
+    expect($('attach-error').hidden).toBe(true);
+  });
+
+  it('can be switched off in Settings, and is on to begin with', async () => {
+    realPlacementDefault = true;
+    await startApp(backend({ list_day_blocks: () => [] }));
+    const box = $<HTMLInputElement>('auto-place');
+    expect(box.checked).toBe(true);
+
+    box.checked = false;
+    box.dispatchEvent(new Event('change', { bubbles: true }));
+    expect(localStorage.getItem('blinkers.autoplace')).toBe('off');
+  });
+});
+
+describe('the add form when the app places blocks', () => {
+  const on = () => localStorage.setItem('blinkers.autoplace', 'on');
+  const pickUrgency = (value: string) => click(document.querySelector(`[data-urgency="${value}"]`)!);
+
+  beforeEach(() => vi.setSystemTime(new Date(2026, 9, 19, 6, 0)));
+  afterEach(() => vi.useRealTimers());
+
+  it('shows only where the block will go, and no picker', async () => {
+    on();
+    await startApp();
+    type($('task-title'), 'Write report');
+    type($('block-duration'), '45');
+    pickUrgency('urgent-important');
+    await settle();
+
+    expect($('block-attach').hidden).toBe(true);
+    expect($('attach-label').textContent).toBe('Where it goes');
+    expect($('attach-help').hidden).toBe(true);
+    expect($('attach-suggestion').hidden).toBe(false);
+    expect($('attach-suggestion').textContent).toContain('8:00 AM');
+  });
+
+  it('still shows the picker when the app is not placing blocks', async () => {
+    await startApp(); // off by default in these tests
+    expect($('block-attach').hidden).toBe(false);
+    expect($('attach-label').textContent).toBe('Follows');
+  });
+
+  it('switches between the two when the setting changes', async () => {
+    on();
+    await startApp();
+    expect($('block-attach').hidden).toBe(true);
+
+    const box = $<HTMLInputElement>('auto-place');
+    box.checked = false;
+    box.dispatchEvent(new Event('change', { bubbles: true }));
+    await settle();
+    expect($('block-attach').hidden).toBe(false);
+    expect($('attach-label').textContent).toBe('Follows');
+  });
+
+  it('leaves the place to the app when the block is made', async () => {
+    on();
+    await startApp();
+    type($('task-title'), 'Write report');
+    type($('block-duration'), '45');
+    pickUrgency('urgent-important');
+    await settle();
+    submitBlockForm();
+    await settle();
+
+    expect(called('create_container')[0].args).toMatchObject({ parent: null, urgency: 'urgent-important', durationMin: 45 });
+  });
+
+  it('says why there is nothing to place against when there are no cues, and offers a typical day', async () => {
+    on();
+    await startApp({ list_cues: () => [] });
+
+    expect($('no-cues').hidden).toBe(false);
+    expect($('no-cues').textContent).toMatch(/cue/i);
+  });
+
+  it('adds a typical day of cues with one press, and then the notice goes away', async () => {
+    on();
+    let cues: unknown[] = [];
+    await startApp({
+      list_cues: () => cues,
+      create_cue: (a) => {
+        cues = [...cues, { ...(a.input as object), id: `c${cues.length}`, onDate: null }];
+        return cues[cues.length - 1];
+      },
+    });
+
+    click($('btn-seed-cues'));
+    await until(() => $('no-cues').hidden);
+
+    expect(called('create_cue').map((c) => (c.args.input as { label: string }).label)).toEqual(['Wake up', 'Lunch', 'Dinner', 'Bedtime']);
+    expect(called('create_cue')[3].args.input).toMatchObject({ timeMin: 1320, endsDay: true });
+    expect($('no-cues').hidden).toBe(true);
+  });
+
+  it('says what went wrong when a cue cannot be added, and keeps the notice', async () => {
+    on();
+    await startApp({ list_cues: () => [], create_cue: () => Promise.reject('That cue overlaps another one.') });
+
+    click($('btn-seed-cues'));
+    await settle(100);
+
+    expect($('seed-error').textContent).toContain('That cue overlaps another one.');
+    expect($('no-cues').hidden).toBe(false);
+  });
+
+  it('does not show the notice when there are cues', async () => {
+    on();
+    await startApp();
+    expect($('no-cues').hidden).toBe(true);
+  });
+});
+
+describe('syncing between devices', () => {
+  const FOLDER = '/Users/me/Dropbox/Blinkers';
+  const NOW_SEC = () => Math.floor(Date.now() / 1000);
+  const other = (over: Record<string, unknown> = {}) => ({
+    fingerprint: 'f', writtenAt: NOW_SEC() - 120, deviceId: 'desk', deviceName: 'Desktop', thisDevice: false, recentlyActive: false, ...over,
+  });
+  const on = (state: string, over: Record<string, unknown> = {}) => ({
+    enabled: true, folder: FOLDER, deviceId: 'me', lastSyncedAt: NOW_SEC() - 300, remote: other(), state, ...over,
+  });
+  let reloaded = 0;
+  // Starting the screen over is announced as a cancelable event, which is taken over here.
+  const takeOverReload = (e: Event) => {
+    e.preventDefault();
+    reloaded += 1;
+  };
+  beforeEach(() => {
+    reloaded = 0;
+    window.addEventListener('blinkers:reload', takeOverReload);
+  });
+  afterEach(() => window.removeEventListener('blinkers:reload', takeOverReload));
+  const startSynced = (status: unknown, extra: Record<string, Handler> = {}) =>
+    startApp({ get_sync_status: () => status, ...extra });
+
+  it('says syncing is off, and offers to choose a folder', async () => {
+    await startApp();
+    expect($('sync-status').textContent).toMatch(/off/i);
+    expect($('btn-sync-folder').hidden).toBe(false);
+    expect($('btn-sync-now').hidden).toBe(true);
+    expect($('btn-sync-off').hidden).toBe(true);
+    expect(called('run_sync')).toHaveLength(0); // nothing to sync with
+    expect($('btn-sync').hidden).toBe(true);
+    expect(errors).toEqual([]);
+  });
+
+  it('starts syncing with the folder the user picks, and does a first sync at once', async () => {
+    let status: unknown = SYNC_OFF;
+    await startApp({
+      'plugin:dialog|open': () => FOLDER,
+      set_sync_folder: () => {
+        status = on('no_remote', { remote: null, lastSyncedAt: null });
+        return status;
+      },
+      get_sync_status: () => status,
+      run_sync: () => ({ kind: 'pushed' }),
+    });
+
+    click($('btn-sync-folder'));
+    await until(() => called('run_sync').length > 0);
+    await settle(50);
+
+    expect(called('set_sync_folder')[0].args).toEqual({ folder: FOLDER });
+    expect(called('run_sync')[0].args).toEqual({ allowPull: true });
+    expect($('sync-message').textContent).toBe('Saved to the sync folder.');
+    expect($('sync-folder').textContent).toBe(FOLDER);
+    expect($('btn-sync-now').hidden).toBe(false);
+    expect($('btn-sync-off').hidden).toBe(false);
+  });
+
+  it('does nothing when the folder picker is cancelled', async () => {
+    await startApp({ 'plugin:dialog|open': () => null });
+    click($('btn-sync-folder'));
+    await settle(80);
+    expect(called('set_sync_folder')).toHaveLength(0);
+  });
+
+  it('saves nothing and asks nothing when the user has not turned syncing on', async () => {
+    await startApp();
+    await settle(80);
+    expect(called('run_sync')).toHaveLength(0);
+  });
+
+  it('syncs when the app opens, and takes newer data from the other device', async () => {
+    await startSynced(on('in_sync'), { run_sync: () => ({ kind: 'pulled', remote: other() }) });
+    await until(() => reloaded > 0);
+
+    expect(called('run_sync')[0].args).toEqual({ allowPull: true });
+    expect(called('get_synced_setting').length).toBeGreaterThan(0); // today's choices come across too
+    expect(reloaded).toBe(1); // the screen starts over with the new data
+  });
+
+  it('opens quietly when there was nothing to take', async () => {
+    await startSynced(on('in_sync'), { run_sync: () => ({ kind: 'inSync' }) });
+    await settle(100);
+    expect(reloaded).toBe(0);
+    expect($('sync-message').hidden).toBe(true);
+    expect($('btn-sync').hidden).toBe(true);
+  });
+
+  it('shows what happened when a sync is pressed by hand', async () => {
+    await startSynced(on('in_sync'), { run_sync: () => ({ kind: 'inSync' }) });
+    await settle(60);
+    click($('btn-sync-now'));
+    await until(() => !$('sync-message').hidden);
+    expect($('sync-message').textContent).toBe('Already up to date.');
+  });
+
+  it('asks which copy to keep when both changed, and lights the header badge', async () => {
+    await startSynced(on('conflict'), { run_sync: () => ({ kind: 'conflict', remote: other() }) });
+    await settle(100);
+
+    expect($('sync-conflict').hidden).toBe(false);
+    expect($('btn-sync').hidden).toBe(false);
+    expect($('sync-status').textContent).toMatch(/both changed/i);
+    expect(reloaded).toBe(0); // nothing was replaced
+  });
+
+  it('keeps this device\'s data when asked to', async () => {
+    await startSynced(on('conflict'), { run_sync: () => ({ kind: 'conflict', remote: other() }), sync_resolve: () => ({ kind: 'pushed' }) });
+    await settle(80);
+    click($('btn-keep-this'));
+    await until(() => called('sync_resolve').length > 0);
+    expect(called('sync_resolve')[0].args).toEqual({ keep: 'this' });
+    expect(reloaded).toBe(0);
+  });
+
+  it('keeps the other device\'s data when asked to, and starts over with it', async () => {
+    await startSynced(on('conflict'), { run_sync: () => ({ kind: 'conflict', remote: other() }), sync_resolve: () => ({ kind: 'pulled', remote: other() }) });
+    await settle(80);
+    click($('btn-keep-other'));
+    await until(() => reloaded > 0);
+    expect(called('sync_resolve')[0].args).toEqual({ keep: 'other' });
+  });
+
+  it('tells the user when the other device runs a different version', async () => {
+    await startSynced(on('version_mismatch'), { run_sync: () => ({ kind: 'versionMismatch', remote: other() }) });
+    await settle(100);
+    expect($('sync-status').textContent).toMatch(/different version/i);
+    expect($('btn-sync').hidden).toBe(false);
+    expect($('sync-conflict').hidden).toBe(true);
+  });
+
+  it('warns when the other device was using the folder a moment ago', async () => {
+    await startSynced(on('in_sync', { remote: other({ recentlyActive: true }) }), { run_sync: () => ({ kind: 'inSync' }) });
+    await settle(100);
+    expect($('sync-warning').hidden).toBe(false);
+    expect($('sync-warning').textContent).toMatch(/phone reminders/i);
+  });
+
+  it('checks again now and then without replacing what is on screen', async () => {
+    await startSynced(on('in_sync'), { run_sync: () => ({ kind: 'inSync' }) });
+    await settle(60);
+    const { syncTick } = await import('../syncUi');
+
+    await syncTick();
+
+    expect(called('run_sync').at(-1)!.args).toEqual({ allowPull: false });
+  });
+
+  it('lights the badge, and does not reload, when the periodic check finds newer data', async () => {
+    let status: unknown = on('in_sync');
+    let outcome: unknown = { kind: 'inSync' };
+    await startSynced(status, { get_sync_status: () => status, run_sync: () => outcome });
+    await settle(60);
+    expect($('btn-sync').hidden).toBe(true);
+
+    // the other device saves something while this one is open
+    status = on('remote_newer');
+    outcome = { kind: 'remoteNewer', remote: other() };
+    const { syncTick } = await import('../syncUi');
+    await syncTick();
+
+    expect($('btn-sync').hidden).toBe(false);
+    expect($('sync-status').textContent).toMatch(/Desktop saved newer data/i);
+    expect(reloaded).toBe(0); // what is on screen is left alone until the user says so
+  });
+
+  it('shows a problem in the section and keeps the app working', async () => {
+    await startSynced(on('in_sync'), { run_sync: () => Promise.reject('The sync folder has a file that is not a Blinkers snapshot.') });
+    await until(() => !$('sync-error').hidden);
+
+    expect($('sync-error').textContent).toContain('not a Blinkers snapshot');
+    click($('btn-add-cue'));
+    expect($('cue-modal').hidden).toBe(false); // the rest of the app still works
+    expect(errors).toEqual([]);
+  });
+
+  it('stops syncing when asked', async () => {
+    await startSynced(on('in_sync'), { run_sync: () => ({ kind: 'inSync' }), set_sync_folder: () => SYNC_OFF });
+    await settle(60);
+    click($('btn-sync-off'));
+    await until(() => called('set_sync_folder').length > 0);
+    expect(called('set_sync_folder')[0].args).toEqual({ folder: null });
+  });
+
+  it('does not stop the app from opening when the folder is slow to answer', async () => {
+    await startSynced(on('in_sync'), { run_sync: () => new Promise(() => {}) }); // never answers
+    await settle(2300); // the app gives the first sync two seconds and then carries on without it
+    click($('btn-add-cue'));
+    expect($('cue-modal').hidden).toBe(false);
+  });
+
+  it('opens Settings from the badge, and does not close it if it is already open', async () => {
+    await startSynced(on('conflict'), { run_sync: () => ({ kind: 'conflict', remote: other() }) });
+    await settle(100);
+    click($('btn-sync'));
+    await settle(50);
+    expect($('settings-drawer').style.maxHeight).not.toBe('0px');
+    click($('btn-sync'));
+    await settle(50);
+    expect($('settings-drawer').style.maxHeight).not.toBe('0px');
+  });
+});
+
+describe('a day that does not fit', () => {
+  const NOON = { id: 'noon', label: 'Noon', timeMin: 720, days: [0, 1, 2, 3, 4, 5, 6], flexMin: 0, endsDay: false };
+  const mk = (id: string, over: Record<string, unknown> = {}) => ({
+    id, blockType: 'deep', orderIndex: 0, title: id, urgency: 'important', createdOn: '2026-10-19',
+    durationMin: 60, parentKind: 'cue', parentId: 'morning', isCompleted: false, endedAtMin: null, committed: false,
+    ...over,
+  });
+  // 08:00 to 12:00 is 240 minutes: 130 + a 20 minute break + 130 only fits 15% shorter
+  const tooMuch = () => [
+    mk('a', { title: 'Email', urgency: 'urgent', durationMin: 130 }),
+    mk('b', { title: 'Report', urgency: 'urgent-important', durationMin: 130, parentKind: 'block', parentId: 'a' }),
+  ];
+  const panel = () => $('fit-panel');
+  const choose = (choice: string) => click(panel().querySelector<HTMLButtonElement>(`[data-choice="${choice}"]`)!);
+  const lastPlan = () => {
+    const plans = called('sync_commitments');
+    return plans[plans.length - 1].args.plan as Array<{ blockId: string }>;
+  };
+
+  beforeEach(() => vi.setSystemTime(new Date(2026, 9, 19, 6, 0)));
+  afterEach(() => {
+    vi.useRealTimers();
+    localStorage.clear();
+  });
+
+  it('asks how to fix it, with both ways out and the recommended one marked', async () => {
+    await startApp({ list_cues: () => [MORNING, NOON], list_day_blocks: tooMuch });
+
+    expect(panel().hidden).toBe(false);
+    expect(panel().textContent).toMatch(/does not fit/i);
+    expect(panel().querySelector('[data-choice="shorten"]')!.textContent).toContain('Shorten everything by 15%');
+    expect(panel().querySelector('[data-choice="drop"]')!.textContent).toContain('Email');
+    expect(panel().querySelector('[data-choice="shorten"]')!.getAttribute('data-recommended')).toBe('true');
+    expect(panel().querySelector('[data-choice="drop"]')!.getAttribute('data-recommended')).toBe('false');
+  });
+
+  it('shows a badge in the header while the answer is waiting', async () => {
+    await startApp({ list_cues: () => [MORNING, NOON], list_day_blocks: tooMuch });
+    expect($('btn-fit').hidden).toBe(false);
+  });
+
+  it('moves the lowest priority block to tomorrow when the user picks that', async () => {
+    await startApp({ list_cues: () => [MORNING, NOON], list_day_blocks: tooMuch });
+
+    choose('drop');
+    await until(() => panel().textContent!.includes('moved to tomorrow'));
+
+    expect(JSON.parse(localStorage.getItem('blinkers.day')!).fit).toBe('drop');
+    expect(lastPlan().map((p) => p.blockId)).toEqual(['b']); // Email (Q3) goes, Report (Q1) stays
+    expect(panel().textContent).toContain('Email moved to tomorrow so today fits.');
+    expect($('btn-fit').hidden).toBe(true); // nothing is waiting any more
+  });
+
+  it('lets the user change their mind', async () => {
+    await startApp({ list_cues: () => [MORNING, NOON], list_day_blocks: tooMuch });
+    choose('drop');
+    await until(() => panel().textContent!.includes('moved to tomorrow'));
+
+    click($('btn-fit-change'));
+    await until(() => panel().textContent!.includes('does not fit'));
+
+    expect(JSON.parse(localStorage.getItem('blinkers.day')!).fit).toBeUndefined();
+    expect(lastPlan().map((p) => p.blockId)).toEqual(['a', 'b']); // shortened again, nothing dropped
+  });
+
+  it('says nothing, and hides the badge, when the day fits', async () => {
+    await startApp({ list_cues: () => [MORNING, NOON], list_day_blocks: () => [mk('a', { durationMin: 60 })] });
+    expect(panel().hidden).toBe(true);
+    expect($('btn-fit').hidden).toBe(true);
   });
 });
 
@@ -800,11 +1551,17 @@ describe('the Today tab and editing a block', () => {
       await openToday();
 
       const rows = [...document.querySelectorAll('#today-list li')].map((li) => li.textContent);
-      expect(rows).toHaveLength(2);
-      expect(rows[0]).toContain('Write report');
-      expect(rows[0]).toContain('8:00 AM · 45 min');
-      expect(rows[1]).toContain('Answer email');
-      expect(rows[1]).toContain('8:45 AM · 30 min');
+      // The cue comes first and says what it leads to. The two work blocks have a 9 minute
+      // recharge between them, shown as its own row.
+      expect(rows).toHaveLength(4);
+      expect(rows[0]).toContain('Morning');
+      expect(rows[0]).toContain('Then: Write report');
+      expect(rows[1]).toContain('Write report');
+      expect(rows[1]).toContain('8:00 AM · 45 min');
+      expect(rows[2]).toContain('Recharge');
+      expect(rows[2]).toContain('8:45 AM · 9 min');
+      expect(rows[3]).toContain('Answer email');
+      expect(rows[3]).toContain('8:54 AM · 30 min');
       expect($('today-empty').hidden).toBe(true);
     });
 

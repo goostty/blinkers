@@ -133,3 +133,105 @@ describe('buildTodayRows', () => {
     expect(rows[0].statusText).toBe('Needs attention');
   });
 });
+
+describe('buildTodayRows: recharge breaks', () => {
+  const rest = { afterBlockId: 'a', cueId: 'cue1', startMin: 645, endMin: 654 };
+
+  it('shows a break in time order between the blocks it separates, named Recharge', () => {
+    const rows = buildTodayRows(
+      [block('a', { durationMin: 45 }), block('b')],
+      [placed('a', 600, 645), placed('b', 654)],
+      [],
+      [rest],
+    );
+    expect(rows.map((r) => r.blockId)).toEqual(['a', 'break:a', 'b']);
+    expect(rows[1]).toMatchObject({ title: 'Recharge', timeText: '10:45 AM · 9 min' });
+  });
+
+  it('says a break is rest and not free time', () => {
+    const [, row] = buildTodayRows([block('a'), block('b')], [placed('a', 600), placed('b', 654)], [], [rest]);
+    expect(row.statusText).toMatch(/not free time/i);
+  });
+
+  it('gives a break no Edit or Drop, because it is not a block the user manages', () => {
+    const [, row] = buildTodayRows([block('a'), block('b')], [placed('a', 600), placed('b', 654)], [], [rest]);
+    expect(row).toMatchObject({ canEdit: false, canDrop: false });
+  });
+
+  it('adds nothing when there are no breaks', () => {
+    const rows = buildTodayRows([block('a')], [placed('a', 600)], []);
+    expect(rows).toHaveLength(1);
+  });
+});
+
+describe('buildTodayRows: lengths the plan changed', () => {
+  it('shows the length the plan gave a block, so a shortened block says so', () => {
+    const [row] = buildTodayRows([block('a', { durationMin: 130 })], [placed('a', 480, 591)], []);
+    expect(row.timeText).toBe('8:00 AM · 111 min');
+  });
+
+  it('shows the length saved for a block that already has a reminder', () => {
+    const [row] = buildTodayRows([block('a', { durationMin: 130 })], [placed('a', 480, 591)], [commitment('a', 'planned', 480)]);
+    expect(row.timeText).toBe('8:00 AM · 30 min'); // the saved reminder is what the phone will say
+  });
+
+  it('keeps the length that was entered for a block that is running, which may be running over', () => {
+    const [row] = buildTodayRows([block('a', { durationMin: 60, committed: true })], [placed('a', 480, 630)], []);
+    expect(row.timeText).toBe('8:00 AM · 60 min');
+  });
+});
+
+describe('buildTodayRows: telling the user what each cue leads to', () => {
+  const morning = { id: 'cue1', label: 'Morning', timeMin: 480 };
+  const lunch = { id: 'cue2', label: 'Lunch', timeMin: 720 };
+  const plan = (id: string, cueId: string, startMin: number): BlockPlacement => ({
+    blockId: id,
+    kind: 'placed',
+    cueId,
+    startMin,
+    endMin: startMin + 30,
+    reason: '',
+  });
+
+  it('puts a cue ahead of its first block and says what comes next', () => {
+    const rows = buildTodayRows([block('a', { title: 'Write report' })], [plan('a', 'cue1', 480)], [], [], [morning]);
+    expect(rows.map((r) => r.blockId)).toEqual(['cue:cue1', 'a']);
+    expect(rows[0]).toMatchObject({ title: 'Morning', timeText: '8:00 AM', statusText: 'Then: Write report', canEdit: false, canDrop: false });
+  });
+
+  it('names only the first block of the cue', () => {
+    const rows = buildTodayRows(
+      [block('a', { title: 'First' }), block('b', { title: 'Second' })],
+      [plan('a', 'cue1', 480), plan('b', 'cue1', 520)],
+      [],
+      [],
+      [morning],
+    );
+    expect(rows[0].statusText).toBe('Then: First');
+  });
+
+  it('says when the first block starts if that is not at the cue', () => {
+    const rows = buildTodayRows([block('a', { title: 'Write report' })], [plan('a', 'cue1', 510)], [], [], [morning]);
+    expect(rows[0].statusText).toBe('Then: Write report at 8:30 AM');
+  });
+
+  it('shows each cue with its own block, in time order', () => {
+    const rows = buildTodayRows(
+      [block('a', { title: 'Write report' }), block('b', { title: 'Call back' })],
+      [plan('b', 'cue2', 720), plan('a', 'cue1', 480)],
+      [],
+      [],
+      [lunch, morning],
+    );
+    expect(rows.map((r) => r.blockId)).toEqual(['cue:cue1', 'a', 'cue:cue2', 'b']);
+  });
+
+  it('leaves out a cue that nothing follows, and blocks that have no place', () => {
+    const rows = buildTodayRows([block('a'), block('w')], [plan('a', 'cue1', 480), other('w', 'unattached')], [], [], [morning, lunch]);
+    expect(rows.map((r) => r.blockId)).toEqual(['cue:cue1', 'a', 'w']);
+  });
+
+  it('adds nothing when it is not given any cues', () => {
+    expect(buildTodayRows([block('a')], [plan('a', 'cue1', 480)], [])).toHaveLength(1);
+  });
+});

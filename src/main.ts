@@ -9,7 +9,11 @@ import { initCueUi } from './cueUi';
 import { initNotifySettingsUi } from './notifySettingsUi';
 import { initReminderTick } from './reminderTick';
 import { initTodayUi } from './todayUi';
-import { refreshDay, showSuggestedSlot, todayKey } from './scheduleUi';
+import { refreshDay, showSuggestedSlot, startOverrunWatch, todayKey } from './scheduleUi';
+import { initFitUi } from './fitUi';
+import { autoPlaceEnabled, setAutoPlace } from './prefs';
+import { initSuggestUi } from './suggestUi';
+import { initSyncUi } from './syncUi';
 import { resolveAttach, resolveDuration, type ParentChoice } from './attach';
 import type { Urgency } from './scheduler';
 import { needsUrgency, resolveUrgency } from './urgency';
@@ -31,6 +35,7 @@ let activeDrawer: Drawer = null;
 let currentBlockType: BlockType = 'deep';
 let currentUrgency: Urgency | null = null;
 let selectedApps: AppEntry[] = [];
+let suggestions: ReturnType<typeof initSuggestUi> | null = null;
 const BLOCK_LABELS: Record<BlockType, string> = {
   deep: 'Deep work',
   routine: 'Routine',
@@ -86,26 +91,44 @@ function setStripVisible(visible: boolean) {
 // Deep work almost always runs over, so the form asks for a buffer (nothing is added for you).
 // Rest only exists when you set it: an empty cue is free time, not rest.
 const LENGTH_HINT: Record<BlockType, string> = {
-  deep: 'Overestimate: deep work almost always takes longer than planned, so add a buffer.',
-  routine: 'How long this usually takes.',
+  deep: 'Overestimate: enter about 1.5x what you think it will take. Deep work almost always runs long, and if the day gets tight the app can shorten blocks back toward your real estimate.',
+  routine: 'Overestimate here too: about 1.5x what you think it will take.',
   reset: 'How long the reset lasts.',
   recharge: 'How long you are resting. Rest only counts when you set it here; an empty cue is just free time.',
 };
+
+// The Settings switch for placing blocks automatically. Turning it on places whatever is waiting
+// straight away; the "Follows" choice is only required while it is off.
+function initPlacementSetting() {
+  const box = document.getElementById('auto-place') as HTMLInputElement | null;
+  if (!box) return;
+  box.checked = autoPlaceEnabled();
+  box.addEventListener('change', () => {
+    setAutoPlace(box.checked);
+    void refreshDay();
+  });
+}
 
 // Each step runs on its own, so one that fails cannot switch off the rest of the app (a form bug
 // once left the cue buttons dead because they were set up after it).
 async function init() {
   const steps: Array<[string, () => void | Promise<unknown>]> = [
+    // First, so that data from the other device is loaded before the screen is built from it.
+    ['sync', initSyncUi],
     ['block selector', initBlockSelector],
     ['urgency picker', initUrgencyPicker],
+    ['placement setting', initPlacementSetting],
+    ['suggested place', () => { suggestions = initSuggestUi(() => ({ blockType: currentBlockType, urgency: currentUrgency })); }],
     ['form layout', () => updateFormLayout(currentBlockType)],
     ['window size', () => appWindow.setSize(compactSize())],
     // Cues made for a day that is over can never run again, so they go before the list is shown.
     ['expired cues', () => invoke('prune_expired_cues', { today: todayKey() })],
     ['cues', initCueUi],
     ['today list', initTodayUi],
+    ['fit panel', initFitUi],
     // Plans today on launch, so the day's commitments are right even if no block is made.
     ['day plan', refreshDay],
+    ['overrun watch', startOverrunWatch],
     // After the plan is saved, so it reads the commitments that plan just wrote.
     ['block actions', () => initBlockActionsUi(setStripVisible, showPlaceNeeded)],
     ['notification settings', initNotifySettingsUi],
@@ -461,6 +484,8 @@ function updateFormLayout(type: BlockType) {
 function updateAttachVisibility() {
   const attachSection = document.getElementById('attach-section');
   if (attachSection) attachSection.hidden = needsUrgency(currentBlockType) && currentUrgency === 'neither';
+  // Called whenever the type or urgency changes, which is when the best place can change too.
+  suggestions?.refresh();
 }
 
 function showFieldError(id: string, message: string) {
@@ -563,6 +588,11 @@ if (anchorBtn) anchorBtn.addEventListener('click', () => toggleDrawer('add-cue')
 document.getElementById('settings')?.addEventListener('click', () => toggleDrawer('settings'));
 document.getElementById('btn-today')?.addEventListener('click', () => toggleDrawer('today'));
 document.getElementById('btn-place')?.addEventListener('click', showPlaceNeeded);
+document.getElementById('btn-fit')?.addEventListener('click', showPlaceNeeded);
+// The sync badge only draws attention; the choices are in Settings. It opens Settings, never closes it.
+document.getElementById('btn-sync')?.addEventListener('click', () => {
+  if (activeDrawer !== 'settings') void toggleDrawer('settings');
+});
 // A tab opens its pane; clicking the lit one does nothing (the header icons are what close it).
 document.querySelectorAll<HTMLElement>('[data-tab]').forEach((tab) => {
   tab.addEventListener('click', () => {
@@ -597,7 +627,7 @@ if (createForm) {
       showFieldError('duration-error', duration.error);
       return;
     }
-    const parent = resolveAttach(urgency.value, (document.getElementById('block-attach') as HTMLSelectElement | null)?.value ?? '');
+    const parent = resolveAttach(urgency.value, autoPlaceEnabled() ? '' : ((document.getElementById('block-attach') as HTMLSelectElement | null)?.value ?? ''), autoPlaceEnabled());
     if (!parent.ok) {
       showFieldError('attach-error', parent.error);
       return;
@@ -608,6 +638,7 @@ if (createForm) {
     }
 
     createForm.reset();
+    suggestions?.reset();
     currentUrgency = null;
     renderUrgency();
     updateAttachVisibility();

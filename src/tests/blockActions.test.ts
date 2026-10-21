@@ -63,9 +63,10 @@ describe('blockActions', () => {
     }
   });
 
-  it('offers Reschedule and Drop for a missed block, both always available', () => {
+  it('offers Continue, Reschedule and Drop for a missed block, all always available', () => {
     expect(blockActions(input('missed'), 9999)).toEqual({
       actions: [
+        { action: 'continue', enabled: true, waitSec: 0 },
         { action: 'reschedule', enabled: true, waitSec: 0 },
         { action: 'drop', enabled: true, waitSec: 0 },
       ],
